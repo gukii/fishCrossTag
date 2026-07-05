@@ -86,22 +86,13 @@ h2 {
   line-height: 1.1;
 }
 
-.image-source-actions input,
+.floating-controls input,
 .empty-source-actions input {
   position: absolute;
   inline-size: 1px;
   block-size: 1px;
   opacity: 0;
   pointer-events: none;
-}
-
-.image-source-actions {
-  position: absolute;
-  left: 12px;
-  top: 12px;
-  z-index: 8;
-  display: grid;
-  gap: 8px;
 }
 
 .source-action-button {
@@ -366,6 +357,8 @@ h2 {
   z-index: 30;
   display: grid;
   gap: 8px;
+  max-height: calc(100svh - 28px);
+  overflow: visible;
 }
 
 .floating-mode-button {

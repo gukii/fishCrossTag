@@ -946,17 +946,6 @@ export default function App() {
                 maxHeight: "calc(100svh - 38px)",
               }}
             >
-              <div className="image-source-actions" data-no-draw onPointerDown={(event) => event.stopPropagation()}>
-                <label className="source-action-button" aria-label="Open photo from album">
-                  <input type="file" accept="image/*" onChange={loadImage} />
-                  <ImagePlus size={19} />
-                </label>
-                <label className="source-action-button" aria-label="Take photo with camera">
-                  <input type="file" accept="image/*" capture="environment" onChange={loadImage} />
-                  <Camera size={19} />
-                </label>
-              </div>
-
               <div
                 ref={imageTransformRef}
                 className="image-transform"
@@ -1070,6 +1059,15 @@ export default function App() {
               </div>
 
               <div className="floating-controls" data-no-draw onPointerDown={(event) => event.stopPropagation()}>
+                <label className="source-action-button floating-mode-button" aria-label="Open photo from album">
+                  <input type="file" accept="image/*" onChange={loadImage} />
+                  <ImagePlus size={19} />
+                </label>
+                <label className="source-action-button floating-mode-button" aria-label="Take photo with camera">
+                  <input type="file" accept="image/*" capture="environment" onChange={loadImage} />
+                  <Camera size={19} />
+                </label>
+
                 <Button
                   className="floating-mode-button"
                   size="icon"
