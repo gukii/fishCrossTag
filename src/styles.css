@@ -166,7 +166,8 @@ h2 {
 
 .image-transform {
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
   transform-origin: 0 0;
   will-change: transform;
 }

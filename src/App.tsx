@@ -31,6 +31,13 @@ type Box = {
   height: number;
 };
 
+type PixelRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 type ViewTransform = {
   scale: number;
   x: number;
@@ -368,6 +375,26 @@ function correctedGeometry(tag: KoiTag, image: ImageInfo): CorrectedGeometry {
   };
 }
 
+function coverImageFrame(image: ImageInfo, stage: PixelRect): PixelRect {
+  if (stage.width <= 0 || stage.height <= 0) {
+    return { x: 0, y: 0, width: 1, height: 1 };
+  }
+
+  const imageAspect = image.width / image.height;
+  const stageAspect = stage.width / stage.height;
+  const frame =
+    imageAspect > stageAspect
+      ? { width: stage.height * imageAspect, height: stage.height }
+      : { width: stage.width, height: stage.width / imageAspect };
+
+  return {
+    x: (stage.width - frame.width) / 2,
+    y: (stage.height - frame.height) / 2,
+    width: frame.width,
+    height: frame.height,
+  };
+}
+
 export default function App() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageTransformRef = useRef<HTMLDivElement | null>(null);
@@ -376,6 +403,7 @@ export default function App() {
   const gesture = useRef<GestureState | null>(null);
   const viewRef = useRef<ViewTransform>({ scale: 1, x: 0, y: 0 });
   const [image, setImage] = useState<ImageInfo | null>(null);
+  const [stageSize, setStageSize] = useState<PixelRect>({ x: 0, y: 0, width: 0, height: 0 });
   const [mode, setMode] = useState<Mode>("tag");
   const [view, setView] = useState<ViewTransform>({ scale: 1, x: 0, y: 0 });
   const [tags, setTags] = useState<KoiTag[]>([]);
@@ -391,6 +419,7 @@ export default function App() {
   const activeStroke = drag?.type === "stroke" ? drag.points : [];
   const activeDisplayBox = activeTag?.bbox;
   const activeOrientedPoints = activeTag && image && activeTag.correctionRotationDeg != null ? orientedCorrectedBoxPoints(activeTag, image) : null;
+  const imageFrame = image ? coverImageFrame(image, stageSize) : null;
 
   useEffect(() => {
     viewRef.current = view;
@@ -417,6 +446,28 @@ export default function App() {
     };
     probe.src = DEFAULT_IMAGE_SRC;
   }, []);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+
+    function updateStageSize() {
+      const rect = stage.getBoundingClientRect();
+      setStageSize({ x: 0, y: 0, width: rect.width, height: rect.height });
+    }
+
+    updateStageSize();
+    const observer = new ResizeObserver(updateStageSize);
+    observer.observe(stage);
+    window.addEventListener("resize", updateStageSize);
+    window.addEventListener("orientationchange", updateStageSize);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateStageSize);
+      window.removeEventListener("orientationchange", updateStageSize);
+    };
+  }, [image]);
 
   useEffect(() => {
     if (!drag || (drag.type !== "bbox" && drag.type !== "rotate")) return;
@@ -527,31 +578,37 @@ export default function App() {
     if (!gesture.current) return;
     const points = Array.from(activePointers.current.values());
     if (!points.length) return;
+    const stageRect = stageRef.current?.getBoundingClientRect();
+    const frame = imageFrame;
+    if (!stageRect || !frame) return;
 
     const centroid = pointerCentroid(points);
     const distance = pointerDistance(points);
     const nextScale = clamp(gesture.current.startView.scale * (distance / gesture.current.startDistance), MIN_VIEW_SCALE, MAX_VIEW_SCALE);
     const scaleRatio = nextScale / gesture.current.startView.scale;
+    const baseX = stageRect.left + frame.x;
+    const baseY = stageRect.top + frame.y;
 
     setView({
       scale: nextScale,
-      x: centroid.x - (gesture.current.startCentroid.x - gesture.current.startView.x) * scaleRatio,
-      y: centroid.y - (gesture.current.startCentroid.y - gesture.current.startView.y) * scaleRatio,
+      x: centroid.x - baseX - (gesture.current.startCentroid.x - baseX - gesture.current.startView.x) * scaleRatio,
+      y: centroid.y - baseY - (gesture.current.startCentroid.y - baseY - gesture.current.startView.y) * scaleRatio,
     });
   }
 
   function zoomAtClientPoint(clientX: number, clientY: number, nextScale: number) {
     const rect = stageRef.current?.getBoundingClientRect();
-    if (!rect) return;
+    const frame = imageFrame;
+    if (!rect || !frame) return;
     const currentView = viewRef.current;
     const clampedScale = clamp(nextScale, MIN_VIEW_SCALE, MAX_VIEW_SCALE);
-    const imageX = (clientX - rect.left - currentView.x) / currentView.scale;
-    const imageY = (clientY - rect.top - currentView.y) / currentView.scale;
+    const imageX = (clientX - rect.left - frame.x - currentView.x) / currentView.scale;
+    const imageY = (clientY - rect.top - frame.y - currentView.y) / currentView.scale;
 
     setView({
       scale: clampedScale,
-      x: clientX - rect.left - imageX * clampedScale,
-      y: clientY - rect.top - imageY * clampedScale,
+      x: clientX - rect.left - frame.x - imageX * clampedScale,
+      y: clientY - rect.top - frame.y - imageY * clampedScale,
     });
   }
 
@@ -567,7 +624,8 @@ export default function App() {
 
   function bringTagIntoView(tag: KoiTag) {
     const stageRect = stageRef.current?.getBoundingClientRect();
-    if (!stageRect || !image) return;
+    const frame = imageFrame;
+    if (!stageRect || !image || !frame) return;
 
     const drawerRect = document.querySelector<HTMLElement>(".thumb-drawer")?.getBoundingClientRect();
     const coveredBottom = drawerRect ? Math.max(0, stageRect.bottom - drawerRect.top) : 0;
@@ -583,8 +641,8 @@ export default function App() {
     const currentScale = viewRef.current.scale;
     const fitScale = Math.min(
       currentScale,
-      availableWidth / Math.max(1, focusBox.width * stageRect.width),
-      availableHeight / Math.max(1, focusBox.height * stageRect.height),
+      availableWidth / Math.max(1, focusBox.width * frame.width),
+      availableHeight / Math.max(1, focusBox.height * frame.height),
     );
     const nextScale = clamp(fitScale, MIN_VIEW_SCALE, MAX_VIEW_SCALE);
     const center = boxCenter(focusBox);
@@ -593,8 +651,8 @@ export default function App() {
 
     setView({
       scale: nextScale,
-      x: targetX - center.x * stageRect.width * nextScale,
-      y: targetY - center.y * stageRect.height * nextScale,
+      x: targetX - frame.x - center.x * frame.width * nextScale,
+      y: targetY - frame.y - center.y * frame.height * nextScale,
     });
   }
 
@@ -989,7 +1047,9 @@ export default function App() {
                 ref={imageTransformRef}
                 className="image-transform"
                 style={{
-                  transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+                  width: imageFrame ? `${imageFrame.width}px` : "100%",
+                  height: imageFrame ? `${imageFrame.height}px` : "100%",
+                  transform: `translate(${(imageFrame?.x ?? 0) + view.x}px, ${(imageFrame?.y ?? 0) + view.y}px) scale(${view.scale})`,
                 }}
               >
                 <img ref={sourceImageRef} src={image.src} alt={image.name} draggable={false} />
