@@ -940,11 +940,6 @@ export default function App() {
               onPointerUp={handleStagePointerEnd}
               onPointerCancel={handleStagePointerEnd}
               onWheel={handleStageWheel}
-              style={{
-                aspectRatio: `${image.width} / ${image.height}`,
-                width: `min(100%, calc((100svh - 38px) * ${image.width / image.height}))`,
-                maxHeight: "calc(100svh - 38px)",
-              }}
             >
               <div
                 ref={imageTransformRef}
