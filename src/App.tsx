@@ -189,6 +189,15 @@ function expandFreeBoxByPixels(box: Box, image: ImageInfo, marginXPx: number, ma
   };
 }
 
+function ensureMinBoxSizePixels(box: Box, image: ImageInfo, minWidthPx: number, minHeightPx: number): Box {
+  const widthPx = box.width * image.width;
+  const heightPx = box.height * image.height;
+  const addWidthPx = Math.max(0, minWidthPx - widthPx);
+  const addHeightPx = Math.max(0, minHeightPx - heightPx);
+
+  return expandFreeBoxByPixels(box, image, addWidthPx / 2, addHeightPx / 2);
+}
+
 function simplifyStroke(points: Point[]) {
   if (points.length < 2) return points;
 
@@ -275,6 +284,20 @@ function bboxHandleStyle(box: Box, handle: Handle) {
   };
 }
 
+function pointHandleStyle(point: Point) {
+  return {
+    left: `${point.x * 100}%`,
+    top: `${point.y * 100}%`,
+  };
+}
+
+function polygonCenter(points: Point[]): Point {
+  return {
+    x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+    y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+  };
+}
+
 function polygonPoints(points: Point[]) {
   return points.map((point) => `${point.x * 1000},${point.y * 1000}`).join(" ");
 }
@@ -305,7 +328,8 @@ function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = correction
 
 function thumbDisplayCrop(tag: KoiTag, image: ImageInfo, correctedBox: Box) {
   const lengthPx = bodyLengthPx(tag, image);
-  return expandFreeBoxByPixels(correctedBox, lengthPx * THUMB_MARGIN_X_BY_LENGTH, lengthPx * THUMB_MARGIN_Y_BY_LENGTH);
+  const padded = expandFreeBoxByPixels(correctedBox, image, lengthPx * THUMB_MARGIN_X_BY_LENGTH, lengthPx * THUMB_MARGIN_Y_BY_LENGTH);
+  return ensureMinBoxSizePixels(padded, image, lengthPx * 0.28, lengthPx * 0.65);
 }
 
 function orientedCorrectedBoxPoints(tag: KoiTag, image: ImageInfo) {
@@ -357,6 +381,7 @@ export default function App() {
   const activeTag = tags.find((tag) => tag.id === activeTagId) ?? null;
   const activeStroke = drag?.type === "stroke" ? drag.points : [];
   const activeDisplayBox = activeTag?.bbox;
+  const activeOrientedPoints = activeTag && image && activeTag.correctionRotationDeg != null ? orientedCorrectedBoxPoints(activeTag, image) : null;
 
   useEffect(() => {
     viewRef.current = view;
@@ -388,7 +413,7 @@ export default function App() {
     if (!drag || (drag.type !== "bbox" && drag.type !== "rotate")) return;
 
     function move(event: globalThis.PointerEvent) {
-      const point = pointFromClient(event.clientX, event.clientY);
+      const point = pointFromClient(event.clientX, event.clientY, { clampToImage: false });
       if (!point) return;
       if (drag.type === "bbox") {
         updateBboxDrag(drag, point);
@@ -440,17 +465,22 @@ export default function App() {
     probe.src = src;
   }
 
-  function pointFromPointer(event: PointerEvent<HTMLElement>) {
-    return pointFromClient(event.clientX, event.clientY);
+  function pointFromPointer(event: PointerEvent<HTMLElement>, options?: { clampToImage?: boolean }) {
+    return pointFromClient(event.clientX, event.clientY, options);
   }
 
-  function pointFromClient(clientX: number, clientY: number) {
+  function pointFromClient(clientX: number, clientY: number, options: { clampToImage?: boolean } = {}) {
     const rect = imageTransformRef.current?.getBoundingClientRect();
     if (!rect) return null;
+    const x = (clientX - rect.left) / rect.width;
+    const y = (clientY - rect.top) / rect.height;
+    if (options.clampToImage === false) {
+      return { x, y };
+    }
 
     return {
-      x: clamp((clientX - rect.left) / rect.width, 0, 1),
-      y: clamp((clientY - rect.top) / rect.height, 0, 1),
+      x: clamp(x, 0, 1),
+      y: clamp(y, 0, 1),
     };
   }
 
@@ -596,7 +626,7 @@ export default function App() {
 
   function continueDrag(event: PointerEvent<HTMLDivElement>) {
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const point = pointFromPointer(event);
+    const point = pointFromPointer(event, { clampToImage: drag.type !== "bbox" });
     if (!point) return;
 
     if (drag.type === "stroke") {
@@ -616,6 +646,7 @@ export default function App() {
         const targetKey: "bbox" | "correctedBBox" = tag.correctionRotationDeg == null ? "bbox" : "correctedBBox";
         const correctedEditPatch = targetKey === "correctedBBox" ? { correctedBBoxEdited: true } : {};
         const normalizeTargetBox = targetKey === "correctedBBox" ? normalizeFreeBox : normalizeBox;
+        const dragPoint = targetKey === "correctedBBox" && image ? rotateImagePoint(point, correctionCenter(tag), correctionRotation(tag, image), image) : point;
 
         if (activeDrag.handle === "move") {
           return {
@@ -623,8 +654,8 @@ export default function App() {
             ...correctedEditPatch,
             [targetKey]: normalizeTargetBox({
               ...activeDrag.startBox,
-              x: activeDrag.startBox.x + point.x - activeDrag.startPoint.x,
-              y: activeDrag.startBox.y + point.y - activeDrag.startPoint.y,
+              x: activeDrag.startBox.x + dragPoint.x - activeDrag.startPoint.x,
+              y: activeDrag.startBox.y + dragPoint.y - activeDrag.startPoint.y,
             }),
           };
         }
@@ -633,16 +664,16 @@ export default function App() {
         const y2 = activeDrag.startBox.y + activeDrag.startBox.height;
         const next =
           activeDrag.handle === "nw"
-            ? { x: point.x, y: point.y, width: x2 - point.x, height: y2 - point.y }
+            ? { x: dragPoint.x, y: dragPoint.y, width: x2 - dragPoint.x, height: y2 - dragPoint.y }
           : activeDrag.handle === "ne"
-              ? { x: activeDrag.startBox.x, y: point.y, width: point.x - activeDrag.startBox.x, height: y2 - point.y }
+              ? { x: activeDrag.startBox.x, y: dragPoint.y, width: dragPoint.x - activeDrag.startBox.x, height: y2 - dragPoint.y }
               : activeDrag.handle === "sw"
-                ? { x: point.x, y: activeDrag.startBox.y, width: x2 - point.x, height: point.y - activeDrag.startBox.y }
+                ? { x: dragPoint.x, y: activeDrag.startBox.y, width: x2 - dragPoint.x, height: dragPoint.y - activeDrag.startBox.y }
                 : {
                     x: activeDrag.startBox.x,
                     y: activeDrag.startBox.y,
-                    width: point.x - activeDrag.startBox.x,
-                    height: point.y - activeDrag.startBox.y,
+                    width: dragPoint.x - activeDrag.startBox.x,
+                    height: dragPoint.y - activeDrag.startBox.y,
                   };
 
         return { ...tag, ...correctedEditPatch, [targetKey]: normalizeTargetBox(next) };
@@ -742,19 +773,20 @@ export default function App() {
   function beginBboxResize(event: PointerEvent<HTMLSpanElement>, tagId: string, handle: Handle) {
     if (mode === "move") return;
     event.stopPropagation();
-    const point = pointFromPointer(event);
+    const point = pointFromPointer(event, { clampToImage: false });
     const tag = tags.find((current) => current.id === tagId);
     if (!point || !tag) return;
     const startBox = tag.correctionRotationDeg == null || !image ? tag.bbox : correctedGeometry(tag, image).correctedBox;
+    const startPoint = tag.correctionRotationDeg == null || !image ? point : rotateImagePoint(point, correctionCenter(tag), correctionRotation(tag, image), image);
     setActiveTagId(tagId);
     setShowOriginalTagId(null);
-    setDrag({ type: "bbox", pointerId: event.pointerId, tagId, handle, startBox, startPoint: point });
+    setDrag({ type: "bbox", pointerId: event.pointerId, tagId, handle, startBox, startPoint });
   }
 
   function beginCorrectionRotate(event: PointerEvent<HTMLSpanElement>, tagId: string) {
     if (mode === "move") return;
     event.stopPropagation();
-    const point = pointFromPointer(event);
+    const point = pointFromPointer(event, { clampToImage: false });
     const tag = tags.find((current) => current.id === tagId);
     if (!point || !tag || !image) return;
     const center = correctionCenter(tag);
@@ -778,12 +810,13 @@ export default function App() {
     if (mode === "move") return;
     if (tagId !== activeTagId || !(event.target as HTMLElement).closest(".bbox-move-handle")) return;
     event.stopPropagation();
-    const point = pointFromPointer(event);
+    const point = pointFromPointer(event, { clampToImage: false });
     const tag = tags.find((current) => current.id === tagId);
     if (!point || !tag) return;
     const startBox = tag.correctionRotationDeg == null || !image ? tag.bbox : correctedGeometry(tag, image).correctedBox;
+    const startPoint = tag.correctionRotationDeg == null || !image ? point : rotateImagePoint(point, correctionCenter(tag), correctionRotation(tag, image), image);
     setShowOriginalTagId(null);
-    setDrag({ type: "bbox", pointerId: event.pointerId, tagId, handle: "move", startBox, startPoint: point });
+    setDrag({ type: "bbox", pointerId: event.pointerId, tagId, handle: "move", startBox, startPoint });
   }
 
   function finishTag() {
@@ -907,7 +940,7 @@ export default function App() {
                     <g key={tag.id} className={tag.id === activeTagId ? "selected" : ""}>
                       <path d={pathFromPoints(tag.bodyLine)} className="body-line" />
                       {tag.finLine && <path d={pathFromPoints(tag.finLine)} className="fin-line" />}
-                      {image && showOriginalTagId === tag.id && tag.correctionRotationDeg != null && (
+                      {image && tag.id === activeTagId && tag.correctionRotationDeg != null && (
                         <polygon className="oriented-bbox" points={polygonPoints(orientedCorrectedBoxPoints(tag, image))} />
                       )}
                       {tag.correctionRotationDeg == null && (
@@ -928,6 +961,42 @@ export default function App() {
                     </g>
                   )}
                 </svg>
+
+                {activeTag && activeOrientedPoints && (
+                  <>
+                    <span
+                      className="bbox-move-handle"
+                      style={pointHandleStyle(polygonCenter(activeOrientedPoints))}
+                      data-no-draw
+                      aria-hidden="true"
+                      onPointerDown={(event) => beginBboxMove(event, activeTag.id)}
+                    />
+                    {(["nw", "se"] as const).map((handle) => {
+                      const point = handle === "nw" ? activeOrientedPoints[0] : activeOrientedPoints[2];
+                      return (
+                        <span
+                          key={handle}
+                          className={`bbox-handle resize-handle ${handle}`}
+                          style={pointHandleStyle(point)}
+                          data-no-draw
+                          onPointerDown={(event) => beginBboxResize(event, activeTag.id, handle)}
+                        />
+                      );
+                    })}
+                    {(["ne", "sw"] as const).map((handle) => {
+                      const point = handle === "ne" ? activeOrientedPoints[1] : activeOrientedPoints[3];
+                      return (
+                        <span
+                          key={handle}
+                          className={`bbox-handle rotate-handle ${handle}`}
+                          style={pointHandleStyle(point)}
+                          data-no-draw
+                          onPointerDown={(event) => beginCorrectionRotate(event, activeTag.id)}
+                        />
+                      );
+                    })}
+                  </>
+                )}
 
                 {tags.map((tag, index) => (
                   <button
