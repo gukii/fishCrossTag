@@ -161,7 +161,7 @@ h2 {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: fill;
   pointer-events: none;
 }
 
@@ -174,33 +174,13 @@ h2 {
   pointer-events: none;
 }
 
-.live-crop {
-  position: absolute;
-  z-index: 1;
-  overflow: hidden;
-  border-radius: 3px;
+.oriented-bbox {
+  fill: rgba(255, 107, 77, 0.08);
+  stroke: #ff6b4d;
+  stroke-width: 7;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.52));
   pointer-events: none;
-}
-
-.live-crop-scene {
-  position: absolute;
-  inset: 0;
-}
-
-.live-crop img {
-  position: absolute;
-  display: block;
-  object-fit: fill;
-  pointer-events: none;
-}
-
-.live-rotated-bbox {
-  position: absolute;
-  border: 2px solid #ff6b4d;
-  background: rgba(255, 107, 77, 0.08);
-  box-shadow:
-    0 0 0 2px rgba(255, 255, 255, 0.72),
-    0 0 18px rgba(0, 0, 0, 0.34);
 }
 
 .body-line,
@@ -546,27 +526,10 @@ h2 {
   box-shadow: 0 5px 14px rgba(0, 0, 0, 0.32);
 }
 
-.thumb-scene {
+.thumb-canvas {
   position: absolute;
   inset: 0;
-}
-
-.thumb-scene img {
-  position: absolute;
   display: block;
-  object-fit: fill;
-  pointer-events: none;
-}
-
-.preview-bbox {
-  position: absolute;
-  border: 2px solid #ff6b4d;
-  background: rgba(255, 107, 77, 0.08);
-}
-
-.thumb-overlay {
-  position: absolute;
-  inset: 0;
   width: 100%;
   height: 100%;
   pointer-events: none;
@@ -619,4 +582,89 @@ h2 {
     right: 24px;
     bottom: 24px;
   }
+}
+
+.affine-page {
+  min-height: 100svh;
+  overflow: hidden;
+  background: #151918;
+}
+
+.affine-workspace {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.affine-stage {
+  position: relative;
+  transform-origin: center center;
+  user-select: none;
+  touch-action: none;
+}
+
+.affine-stage img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.affine-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.affine-body-line,
+.affine-fin-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72));
+}
+
+.affine-body-line {
+  stroke: #ffd348;
+  stroke-width: 10;
+}
+
+.affine-fin-line {
+  stroke: #55e5ff;
+  stroke-width: 8;
+}
+
+.affine-controls {
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 20;
+  display: grid;
+  gap: 8px;
+}
+
+.affine-thumb {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 18;
+  width: min(34vw, 170px);
+  max-height: 42svh;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #171b19;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.34);
+}
+
+.affine-thumb canvas {
+  display: block;
+  width: 100%;
+  height: auto;
 }

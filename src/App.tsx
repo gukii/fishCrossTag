@@ -1,4 +1,4 @@
-import { ChangeEvent, PointerEvent, WheelEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, PointerEvent, RefObject, WheelEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
   Hand,
@@ -42,6 +42,7 @@ type KoiTag = {
   finLine?: Point[];
   bbox: Box;
   correctedBBox?: Box;
+  correctedBBoxEdited?: boolean;
   correctionRotationDeg?: number;
   correctedPoints?: Point[];
   status: "active" | "done";
@@ -67,13 +68,8 @@ type GestureState = {
 };
 
 type CorrectedGeometry = {
-  crop: Box;
-  cropCenter: Point;
-  cropBodyLine: Point[];
-  cropFinLine?: Point[];
   rotation: number;
   correctedBox: Box;
-  cropCorrectedBox: Box;
 };
 
 const MIN_STROKE_POINTS = 3;
@@ -81,8 +77,6 @@ const STROKE_PADDING = 0.035;
 const MIN_VIEW_SCALE = 0.05;
 const MAX_VIEW_SCALE = 8;
 const VIEW_ZOOM_STEP = 1.2;
-const THUMB_MARGIN_X = 0.3;
-const THUMB_MARGIN_Y = 0.05;
 const DEFAULT_IMAGE_SRC = "/images/default-koi.jpg";
 const DEFAULT_IMAGE_NAME = "20_0.jpg";
 const HMR_TIME_KEY = "koi-tag-last-hot-reload";
@@ -123,6 +117,20 @@ function normalizeBox(box: Box): Box {
   };
 }
 
+function normalizeFreeBox(box: Box): Box {
+  const x1 = Math.min(box.x, box.x + box.width);
+  const y1 = Math.min(box.y, box.y + box.height);
+  const x2 = Math.max(box.x, box.x + box.width);
+  const y2 = Math.max(box.y, box.y + box.height);
+
+  return {
+    x: x1,
+    y: y1,
+    width: Math.max(0.01, x2 - x1),
+    height: Math.max(0.01, y2 - y1),
+  };
+}
+
 function boxFromPoints(points: Point[], padding = STROKE_PADDING): Box {
   const xs = points.map((point) => point.x);
   const ys = points.map((point) => point.y);
@@ -145,73 +153,29 @@ function expandBoxToPoints(box: Box, points: Point[]) {
   });
 }
 
-function boxCorners(box: Box): Point[] {
+function orderedBoxCorners(box: Box): Point[] {
   return [
     { x: box.x, y: box.y },
     { x: box.x + box.width, y: box.y },
-    { x: box.x, y: box.y + box.height },
     { x: box.x + box.width, y: box.y + box.height },
+    { x: box.x, y: box.y + box.height },
   ];
 }
 
-function cropForAnyBoxRotation(box: Box, image: ImageInfo): Box {
-  const center = {
-    x: box.x + box.width / 2,
-    y: box.y + box.height / 2,
-  };
-  const widthPx = box.width * image.width;
-  const heightPx = box.height * image.height;
-  const diagonalPx = Math.hypot(widthPx, heightPx) * 1.08;
-  const cropWidth = Math.min(1, diagonalPx / image.width);
-  const cropHeight = Math.min(1, diagonalPx / image.height);
-
-  return normalizeBox({
-    x: clamp(center.x - cropWidth / 2, 0, 1 - cropWidth),
-    y: clamp(center.y - cropHeight / 2, 0, 1 - cropHeight),
-    width: cropWidth,
-    height: cropHeight,
-  });
+function correctionCenter(tag: KoiTag): Point {
+  return tag.bodyLine[0];
 }
 
-function pointToCrop(point: Point, crop: Box): Point {
+function boxFromPointsWithMargin(points: Point[], marginX: number, marginY: number): Box {
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+
   return {
-    x: (point.x - crop.x) / crop.width,
-    y: (point.y - crop.y) / crop.height,
+    x: Math.min(...xs) - marginX,
+    y: Math.min(...ys) - marginY,
+    width: Math.max(...xs) - Math.min(...xs) + marginX * 2,
+    height: Math.max(...ys) - Math.min(...ys) + marginY * 2,
   };
-}
-
-function pointFromCrop(point: Point, crop: Box): Point {
-  return {
-    x: crop.x + point.x * crop.width,
-    y: crop.y + point.y * crop.height,
-  };
-}
-
-function boxToCrop(box: Box, crop: Box): Box {
-  return normalizeBox({
-    x: (box.x - crop.x) / crop.width,
-    y: (box.y - crop.y) / crop.height,
-    width: box.width / crop.width,
-    height: box.height / crop.height,
-  });
-}
-
-function boxFromCrop(box: Box, crop: Box): Box {
-  return normalizeBox({
-    x: crop.x + box.x * crop.width,
-    y: crop.y + box.y * crop.height,
-    width: box.width * crop.width,
-    height: box.height * crop.height,
-  });
-}
-
-function expandBoxByPercent(box: Box, marginX: number, marginY: number): Box {
-  return normalizeBox({
-    x: box.x - box.width * marginX,
-    y: box.y - box.height * marginY,
-    width: box.width * (1 + marginX * 2),
-    height: box.height * (1 + marginY * 2),
-  });
 }
 
 function simplifyStroke(points: Point[]) {
@@ -253,14 +217,31 @@ function rotatePoint(point: Point, center: Point, degrees: number): Point {
   };
 }
 
-function pointerAngle(point: Point, center: Point) {
-  return (Math.atan2(point.y - center.y, point.x - center.x) * 180) / Math.PI;
+function rotateImagePoint(point: Point, center: Point, degrees: number, image: ImageInfo): Point {
+  const rotated = rotatePoint(
+    { x: point.x * image.width, y: point.y * image.height },
+    { x: center.x * image.width, y: center.y * image.height },
+    degrees,
+  );
+
+  return {
+    x: rotated.x / image.width,
+    y: rotated.y / image.height,
+  };
 }
 
-function verticalLineRotation(points: Point[]) {
+function pointerAngle(point: Point, center: Point, image?: ImageInfo) {
+  const dx = image ? (point.x - center.x) * image.width : point.x - center.x;
+  const dy = image ? (point.y - center.y) * image.height : point.y - center.y;
+  return (Math.atan2(dy, dx) * 180) / Math.PI;
+}
+
+function verticalLineRotation(points: Point[], image?: ImageInfo) {
   const head = points[0];
   const tail = points[points.length - 1];
-  const angle = (Math.atan2(head.y - tail.y, head.x - tail.x) * 180) / Math.PI;
+  const dx = image ? (head.x - tail.x) * image.width : head.x - tail.x;
+  const dy = image ? (head.y - tail.y) * image.height : head.y - tail.y;
+  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
   return 90 - angle;
 }
 
@@ -283,6 +264,32 @@ function bboxHandleStyle(box: Box, handle: Handle) {
   };
 }
 
+function polygonPoints(points: Point[]) {
+  return points.map((point) => `${point.x * 1000},${point.y * 1000}`).join(" ");
+}
+
+function correctionRotation(tag: KoiTag, image: ImageInfo) {
+  return tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image);
+}
+
+function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = correctionRotation(tag, image)) {
+  if (tag.correctedBBoxEdited && tag.correctedBBox) return tag.correctedBBox;
+
+  const center = correctionCenter(tag);
+  const sourcePoints = tag.finLine ? [...tag.bodyLine, ...tag.finLine] : tag.bodyLine;
+  const rotatedPoints = sourcePoints.map((point) => rotateImagePoint(point, center, rotation, image));
+  const head = tag.bodyLine[0];
+  const tail = tag.bodyLine[tag.bodyLine.length - 1];
+  const lengthPx = Math.max(40, Math.hypot((head.x - tail.x) * image.width, (head.y - tail.y) * image.height));
+  return boxFromPointsWithMargin(rotatedPoints, (lengthPx * 0.22) / image.width, (lengthPx * 0.04) / image.height);
+}
+
+function orientedCorrectedBoxPoints(tag: KoiTag, image: ImageInfo) {
+  const rotation = correctionRotation(tag, image);
+  const center = correctionCenter(tag);
+  return orderedBoxCorners(sourceCorrectedBox(tag, image, rotation)).map((point) => rotateImagePoint(point, center, -rotation, image));
+}
+
 function controlPosition(box: Box) {
   const placeBelow = box.y < 0.16;
   const top = placeBelow ? box.y + box.height + 0.018 : box.y - 0.018;
@@ -295,37 +302,19 @@ function controlPosition(box: Box) {
 }
 
 function correctedGeometry(tag: KoiTag, image: ImageInfo): CorrectedGeometry {
-  const crop = cropForAnyBoxRotation(tag.bbox, image);
-  const center = {
-    x: tag.bbox.x + tag.bbox.width / 2,
-    y: tag.bbox.y + tag.bbox.height / 2,
-  };
-  const cropCenter = pointToCrop(center, crop);
-  const cropBodyLine = tag.bodyLine.map((point) => pointToCrop(point, crop));
-  const cropFinLine = tag.finLine?.map((point) => pointToCrop(point, crop));
-  const rotation = tag.correctionRotationDeg ?? verticalLineRotation(cropBodyLine);
-  const cropBboxCorners = boxCorners(tag.bbox).map((point) => pointToCrop(point, crop));
-  const rotatedCropBodyLine = cropBodyLine.map((point) => rotatePoint(point, cropCenter, rotation));
-  const rotatedCropFinLine = cropFinLine?.map((point) => rotatePoint(point, cropCenter, rotation));
-  const correctedCropPoints = tag.finLine
-    ? [...rotatedCropBodyLine, ...(rotatedCropFinLine ?? [])]
-    : cropBboxCorners.map((point) => rotatePoint(point, cropCenter, rotation));
-  const correctedBox = tag.correctedBBox ?? boxFromCrop(boxFromPoints(correctedCropPoints, 0.02), crop);
-  const cropCorrectedBox = boxToCrop(correctedBox, crop);
+  const rotation = correctionRotation(tag, image);
+  const correctedBox = sourceCorrectedBox(tag, image, rotation);
 
   return {
-    crop,
-    cropCenter,
-    cropBodyLine,
-    cropFinLine,
     rotation,
     correctedBox,
-    cropCorrectedBox,
   };
 }
 
 export default function App() {
   const stageRef = useRef<HTMLDivElement | null>(null);
+  const imageTransformRef = useRef<HTMLDivElement | null>(null);
+  const sourceImageRef = useRef<HTMLImageElement | null>(null);
   const activePointers = useRef<Map<number, Point>>(new Map());
   const gesture = useRef<GestureState | null>(null);
   const viewRef = useRef<ViewTransform>({ scale: 1, x: 0, y: 0 });
@@ -343,9 +332,7 @@ export default function App() {
 
   const activeTag = tags.find((tag) => tag.id === activeTagId) ?? null;
   const activeStroke = drag?.type === "stroke" ? drag.points : [];
-  const showActiveCorrectionControls = Boolean(activeTag?.finLine || activeTag?.correctionRotationDeg != null);
-  const activeDisplayBox =
-    activeTag && image && activeTag.correctionRotationDeg != null && showOriginalTagId !== activeTag.id ? correctedGeometry(activeTag, image).correctedBox : activeTag?.bbox;
+  const activeDisplayBox = activeTag?.bbox;
 
   useEffect(() => {
     viewRef.current = view;
@@ -384,7 +371,7 @@ export default function App() {
         return;
       }
 
-      const angle = pointerAngle(point, drag.center);
+      const angle = pointerAngle(point, drag.center, image ?? undefined);
       updateTagCorrection(drag.tagId, {
         correctionRotationDeg: drag.startRotation + angle - drag.startAngle,
       });
@@ -434,13 +421,12 @@ export default function App() {
   }
 
   function pointFromClient(clientX: number, clientY: number) {
-    const rect = stageRef.current?.getBoundingClientRect();
+    const rect = imageTransformRef.current?.getBoundingClientRect();
     if (!rect) return null;
-    const currentView = viewRef.current;
 
     return {
-      x: clamp((clientX - rect.left - currentView.x) / currentView.scale / rect.width, 0, 1),
-      y: clamp((clientY - rect.top - currentView.y) / currentView.scale / rect.height, 0, 1),
+      x: clamp((clientX - rect.left) / rect.width, 0, 1),
+      y: clamp((clientY - rect.top) / rect.height, 0, 1),
     };
   }
 
@@ -604,11 +590,14 @@ export default function App() {
       current.map((tag) => {
         if (tag.id !== activeDrag.tagId) return tag;
         const targetKey: "bbox" | "correctedBBox" = tag.correctionRotationDeg == null ? "bbox" : "correctedBBox";
+        const correctedEditPatch = targetKey === "correctedBBox" ? { correctedBBoxEdited: true } : {};
+        const normalizeTargetBox = targetKey === "correctedBBox" ? normalizeFreeBox : normalizeBox;
 
         if (activeDrag.handle === "move") {
           return {
             ...tag,
-            [targetKey]: normalizeBox({
+            ...correctedEditPatch,
+            [targetKey]: normalizeTargetBox({
               ...activeDrag.startBox,
               x: activeDrag.startBox.x + point.x - activeDrag.startPoint.x,
               y: activeDrag.startBox.y + point.y - activeDrag.startPoint.y,
@@ -632,7 +621,7 @@ export default function App() {
                     height: point.y - activeDrag.startBox.y,
                   };
 
-        return { ...tag, [targetKey]: normalizeBox(next) };
+        return { ...tag, ...correctedEditPatch, [targetKey]: normalizeTargetBox(next) };
       }),
     );
   }
@@ -662,6 +651,7 @@ export default function App() {
             bodyLine: stroke,
             bbox: boxFromPoints(points),
             correctedBBox: undefined,
+            correctedBBoxEdited: false,
             correctedPoints: undefined,
             correctionRotationDeg: undefined,
           };
@@ -680,6 +670,7 @@ export default function App() {
                 finLine: stroke,
                 bbox: expandBoxToPoints(tag.bbox, stroke),
                 correctedBBox: undefined,
+                correctedBBoxEdited: false,
                 correctedPoints: undefined,
                 correctionRotationDeg: undefined,
               }
@@ -699,6 +690,7 @@ export default function App() {
                 finLine: stroke,
                 bbox: expandBoxToPoints(tag.bbox, stroke),
                 correctedBBox: undefined,
+                correctedBBoxEdited: false,
                 correctedPoints: undefined,
                 correctionRotationDeg: undefined,
               }
@@ -741,13 +733,8 @@ export default function App() {
     const point = pointFromPointer(event);
     const tag = tags.find((current) => current.id === tagId);
     if (!point || !tag || !image) return;
-    const center = {
-      x: tag.bbox.x + tag.bbox.width / 2,
-      y: tag.bbox.y + tag.bbox.height / 2,
-    };
-    const crop = cropForAnyBoxRotation(tag.bbox, image);
-    const cropBodyLine = tag.bodyLine.map((bodyPoint) => pointToCrop(bodyPoint, crop));
-    const startRotation = tag.correctionRotationDeg ?? verticalLineRotation(cropBodyLine);
+    const center = correctionCenter(tag);
+    const startRotation = tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image);
     setActiveTagId(tagId);
     setShowOriginalTagId(null);
     updateTagCorrection(tagId, {
@@ -758,7 +745,7 @@ export default function App() {
       pointerId: event.pointerId,
       tagId,
       center,
-      startAngle: pointerAngle(point, center),
+      startAngle: pointerAngle(point, center, image),
       startRotation,
     });
   }
@@ -811,7 +798,14 @@ export default function App() {
     setShowOriginalTagId(null);
     setEditTarget("auto");
     setTags((current) =>
-      current.map((tag) => (tag.id === tagId ? { ...tag, status: "active" } : tag)),
+      current.map((tag) => {
+        if (tag.id !== tagId) return tag;
+        return {
+          ...tag,
+          status: "active",
+          correctionRotationDeg: image ? (tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image)) : tag.correctionRotationDeg,
+        };
+      }),
     );
   }
 
@@ -823,11 +817,22 @@ export default function App() {
       return;
     }
 
+    const tag = tags.find((current) => current.id === tagId);
     setActiveTagId(tagId);
     setShowOriginalTagId(tagId);
     setEditTarget("auto");
     setTags((current) =>
-      current.map((tag) => (tag.id === tagId ? { ...tag, status: "active" } : tag)),
+      current.map((currentTag) => {
+        if (currentTag.id !== tagId) return currentTag;
+        if (!image || tag?.correctionRotationDeg != null) {
+          return { ...currentTag, status: "active" };
+        }
+        return {
+          ...currentTag,
+          status: "active",
+          correctionRotationDeg: verticalLineRotation(currentTag.bodyLine, image),
+        };
+      }),
     );
   }
 
@@ -853,7 +858,11 @@ export default function App() {
               onPointerUp={handleStagePointerEnd}
               onPointerCancel={handleStagePointerEnd}
               onWheel={handleStageWheel}
-              style={{ aspectRatio: `${image.width} / ${image.height}` }}
+              style={{
+                aspectRatio: `${image.width} / ${image.height}`,
+                width: `min(100%, calc((100svh - 38px) * ${image.width / image.height}))`,
+                maxHeight: "calc(100svh - 38px)",
+              }}
             >
               <label className="floating-open-button" data-no-draw onPointerDown={(event) => event.stopPropagation()} aria-label="Open koi photo">
                 <input type="file" accept="image/*" onChange={loadImage} />
@@ -861,20 +870,22 @@ export default function App() {
               </label>
 
               <div
+                ref={imageTransformRef}
                 className="image-transform"
                 style={{
                   transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
                 }}
               >
-                <img src={image.src} alt={image.name} draggable={false} />
-
-                {activeTag && activeTag.correctionRotationDeg != null && showOriginalTagId !== activeTag.id && <LiveRotatedCrop image={image} tag={activeTag} />}
+                <img ref={sourceImageRef} src={image.src} alt={image.name} draggable={false} />
 
                 <svg className="overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none">
                   {tags.map((tag, index) => (
                     <g key={tag.id} className={tag.id === activeTagId ? "selected" : ""}>
                       <path d={pathFromPoints(tag.bodyLine)} className="body-line" />
                       {tag.finLine && <path d={pathFromPoints(tag.finLine)} className="fin-line" />}
+                      {image && showOriginalTagId === tag.id && tag.correctionRotationDeg != null && (
+                        <polygon className="oriented-bbox" points={polygonPoints(orientedCorrectedBoxPoints(tag, image))} />
+                      )}
                       {tag.correctionRotationDeg == null && (
                         <>
                           <circle className="head-dot" cx={tag.bodyLine[0].x * 1000} cy={tag.bodyLine[0].y * 1000} r="22" />
@@ -893,45 +904,6 @@ export default function App() {
                     </g>
                   )}
                 </svg>
-
-                {tags.map((tag) => (
-                  <div
-                    key={`${tag.id}-bbox`}
-                    className={`bbox ${tag.status === "done" ? "done" : ""} ${tag.id === activeTagId ? "active editable" : ""}`}
-                    style={bboxStyle(tag.id === activeTagId && activeDisplayBox ? activeDisplayBox : tag.bbox)}
-                    aria-hidden="true"
-                  />
-                ))}
-
-                {activeTag && activeDisplayBox && showActiveCorrectionControls && (
-                  <>
-                    <span
-                      className="bbox-move-handle"
-                      style={bboxHandleStyle(activeDisplayBox, "move")}
-                      data-no-draw
-                      aria-hidden="true"
-                      onPointerDown={(event) => beginBboxMove(event, activeTag.id)}
-                    />
-                    {(["nw", "se"] as const).map((handle) => (
-                      <span
-                        key={handle}
-                        className={`bbox-handle resize-handle ${handle}`}
-                        style={bboxHandleStyle(activeDisplayBox, handle)}
-                        data-no-draw
-                        onPointerDown={(event) => beginBboxResize(event, activeTag.id, handle)}
-                      />
-                    ))}
-                    {(["ne", "sw"] as const).map((handle) => (
-                      <span
-                        key={handle}
-                        className={`bbox-handle rotate-handle ${handle}`}
-                        style={bboxHandleStyle(activeDisplayBox, handle)}
-                        data-no-draw
-                        onPointerDown={(event) => beginCorrectionRotate(event, activeTag.id)}
-                      />
-                    ))}
-                  </>
-                )}
 
                 {tags.map((tag, index) => (
                   <button
@@ -1045,6 +1017,7 @@ export default function App() {
           image={image}
           tags={tags}
           activeTagId={activeTagId}
+          sourceImageRef={sourceImageRef}
           onClose={() => setDrawerOpen(false)}
           onDelete={deleteTagById}
           onSelect={selectTagForEditing}
@@ -1054,39 +1027,100 @@ export default function App() {
   );
 }
 
-function LiveRotatedCrop({ image, tag }: { image: ImageInfo; tag: KoiTag }) {
-  const geometry = useMemo(() => correctedGeometry(tag, image), [image, tag]);
+function RotatedCropCanvas({
+  image,
+  sourceImageRef,
+  tag,
+  crop,
+  rotation,
+  className,
+}: {
+  image: ImageInfo;
+  sourceImageRef: RefObject<HTMLImageElement | null>;
+  tag: KoiTag;
+  crop: Box;
+  rotation: number;
+  className: string;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  return (
-    <div className="live-crop" style={bboxStyle(geometry.crop)} aria-hidden="true">
-      <div
-        className="live-crop-scene"
-        style={{
-          transform: `rotate(${geometry.rotation}deg)`,
-          transformOrigin: `${geometry.cropCenter.x * 100}% ${geometry.cropCenter.y * 100}%`,
-        }}
-      >
-        <img
-          src={image.src}
-          alt=""
-          draggable={false}
-          style={{
-            left: `${(-geometry.crop.x / geometry.crop.width) * 100}%`,
-            top: `${(-geometry.crop.y / geometry.crop.height) * 100}%`,
-            width: `${(1 / geometry.crop.width) * 100}%`,
-            height: `${(1 / geometry.crop.height) * 100}%`,
-          }}
-        />
-      </div>
-      <div className="live-rotated-bbox" style={bboxStyle(geometry.cropCorrectedBox)} />
-    </div>
-  );
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const cropWidthPx = Math.max(1, Math.round(crop.width * image.width));
+    const cropHeightPx = Math.max(1, Math.round(crop.height * image.height));
+    canvas.width = cropWidthPx;
+    canvas.height = cropHeightPx;
+
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    function draw(photo: HTMLImageElement) {
+      const center = correctionCenter(tag);
+      const centerX = center.x * image.width;
+      const centerY = center.y * image.height;
+      const cropX = crop.x * image.width;
+      const cropY = crop.y * image.height;
+
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, cropWidthPx, cropHeightPx);
+      context.translate(-cropX, -cropY);
+      context.translate(centerX, centerY);
+      context.rotate((rotation * Math.PI) / 180);
+      context.translate(-centerX, -centerY);
+      context.drawImage(photo, 0, 0, image.width, image.height);
+
+      drawCanvasLine(context, tag.bodyLine, image, "#ffd348", 10);
+      if (tag.finLine) {
+        drawCanvasLine(context, tag.finLine, image, "#55e5ff", 8);
+      }
+    }
+
+    const sourceImage = sourceImageRef.current;
+    if (sourceImage?.complete && sourceImage.naturalWidth > 0) {
+      draw(sourceImage);
+      return;
+    }
+
+    const fallback = new Image();
+    fallback.onload = () => draw(fallback);
+    fallback.src = image.src;
+  }, [crop, image, rotation, sourceImageRef, tag]);
+
+  return <canvas ref={canvasRef} className={className} />;
+}
+
+function drawCanvasLine(context: CanvasRenderingContext2D, points: Point[], image: ImageInfo, color: string, width: number) {
+  if (points.length < 2) return;
+
+  context.save();
+  context.beginPath();
+  points.forEach((point, index) => {
+    const x = point.x * image.width;
+    const y = point.y * image.height;
+    if (index === 0) {
+      context.moveTo(x, y);
+      return;
+    }
+    context.lineTo(x, y);
+  });
+  context.lineWidth = width;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+  context.strokeStyle = color;
+  context.shadowColor = "rgba(0, 0, 0, 0.72)";
+  context.shadowBlur = 2;
+  context.shadowOffsetY = 1;
+  context.stroke();
+  context.restore();
 }
 
 function CorrectedThumbDrawer({
   image,
   tags,
   activeTagId,
+  sourceImageRef,
   onClose,
   onDelete,
   onSelect,
@@ -1094,6 +1128,7 @@ function CorrectedThumbDrawer({
   image: ImageInfo;
   tags: KoiTag[];
   activeTagId: string | null;
+  sourceImageRef: RefObject<HTMLImageElement | null>;
   onClose: () => void;
   onDelete: (tagId: string) => void;
   onSelect: (tagId: string) => void;
@@ -1112,6 +1147,7 @@ function CorrectedThumbDrawer({
               image={image}
               tag={tag}
               active={tag.id === activeTagId}
+              sourceImageRef={sourceImageRef}
               onDelete={() => onDelete(tag.id)}
               onSelect={() => onSelect(tag.id)}
             />
@@ -1126,48 +1162,24 @@ function CorrectedThumb({
   image,
   tag,
   active,
+  sourceImageRef,
   onDelete,
   onSelect,
 }: {
   image: ImageInfo;
   tag: KoiTag;
   active: boolean;
+  sourceImageRef: RefObject<HTMLImageElement | null>;
   onDelete: () => void;
   onSelect: () => void;
 }) {
   const geometry = useMemo(() => correctedGeometry(tag, image), [image, tag]);
-  const thumbCrop = useMemo(() => expandBoxByPercent(geometry.correctedBox, THUMB_MARGIN_X, THUMB_MARGIN_Y), [geometry.correctedBox]);
-  const originalCenter = useMemo(
-    () => ({
-      x: tag.bbox.x + tag.bbox.width / 2,
-      y: tag.bbox.y + tag.bbox.height / 2,
-    }),
-    [tag.bbox],
-  );
-  const thumbCropCenter = useMemo(() => pointToCrop(originalCenter, thumbCrop), [originalCenter, thumbCrop]);
+  const thumbCrop = geometry.correctedBox;
 
   return (
     <button className={`thumb-card ${active ? "active" : ""}`} style={{ aspectRatio: `${thumbCrop.width * image.width} / ${thumbCrop.height * image.height}` }} onClick={onSelect}>
       <div className="thumb-stage">
-        <div
-          className="thumb-scene"
-          style={{
-            transform: `rotate(${geometry.rotation}deg)`,
-            transformOrigin: `${thumbCropCenter.x * 100}% ${thumbCropCenter.y * 100}%`,
-          }}
-        >
-          <img
-            src={image.src}
-            alt=""
-            draggable={false}
-            style={{
-              left: `${(-thumbCrop.x / thumbCrop.width) * 100}%`,
-              top: `${(-thumbCrop.y / thumbCrop.height) * 100}%`,
-              width: `${(1 / thumbCrop.width) * 100}%`,
-              height: `${(1 / thumbCrop.height) * 100}%`,
-            }}
-          />
-        </div>
+        <RotatedCropCanvas className="thumb-canvas" image={image} sourceImageRef={sourceImageRef} tag={tag} crop={thumbCrop} rotation={geometry.rotation} />
       </div>
       <Button
         size="icon"
