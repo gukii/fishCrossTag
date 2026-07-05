@@ -182,6 +182,13 @@ function boxFromPointsWithMargin(points: Point[], marginX: number, marginY: numb
   };
 }
 
+function boxCenter(box: Box): Point {
+  return {
+    x: box.x + box.width / 2,
+    y: box.y + box.height / 2,
+  };
+}
+
 function expandFreeBoxByPixels(box: Box, image: ImageInfo, marginXPx: number, marginYPx: number): Box {
   return {
     x: box.x - marginXPx / image.width,
@@ -558,6 +565,39 @@ export default function App() {
     setView({ scale: 1, x: 0, y: 0 });
   }
 
+  function bringTagIntoView(tag: KoiTag) {
+    const stageRect = stageRef.current?.getBoundingClientRect();
+    if (!stageRect || !image) return;
+
+    const drawerRect = document.querySelector<HTMLElement>(".thumb-drawer")?.getBoundingClientRect();
+    const coveredBottom = drawerRect ? Math.max(0, stageRect.bottom - drawerRect.top) : 0;
+    const visibleHeight = Math.max(80, stageRect.height - coveredBottom);
+    const screenPadding = 28;
+    const availableWidth = Math.max(80, stageRect.width - screenPadding * 2);
+    const availableHeight = Math.max(80, visibleHeight - screenPadding * 2);
+    const focusedTag: KoiTag = {
+      ...tag,
+      correctionRotationDeg: tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image),
+    };
+    const focusBox = boxFromPointsWithMargin(orientedCorrectedBoxPoints(focusedTag, image), 0, 0);
+    const currentScale = viewRef.current.scale;
+    const fitScale = Math.min(
+      currentScale,
+      availableWidth / Math.max(1, focusBox.width * stageRect.width),
+      availableHeight / Math.max(1, focusBox.height * stageRect.height),
+    );
+    const nextScale = clamp(fitScale, MIN_VIEW_SCALE, MAX_VIEW_SCALE);
+    const center = boxCenter(focusBox);
+    const targetX = stageRect.width / 2;
+    const targetY = visibleHeight / 2;
+
+    setView({
+      scale: nextScale,
+      x: targetX - center.x * stageRect.width * nextScale,
+      y: targetY - center.y * stageRect.height * nextScale,
+    });
+  }
+
   function handleStageWheel(event: WheelEvent<HTMLDivElement>) {
     if (mode !== "move") return;
     event.preventDefault();
@@ -876,6 +916,10 @@ export default function App() {
   }
 
   function selectTagForEditing(tagId: string) {
+    const tag = tags.find((current) => current.id === tagId);
+    if (tag) {
+      bringTagIntoView(tag);
+    }
     setActiveTagId(tagId);
     setShowOriginalTagId(null);
     setEditTarget("auto");
