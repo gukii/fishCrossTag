@@ -1,5 +1,6 @@
 import { ChangeEvent, PointerEvent, RefObject, WheelEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Camera,
   Check,
   ImagePlus,
   Minus,
@@ -445,6 +446,7 @@ export default function App() {
 
   function loadImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
+    event.target.value = "";
     if (!file) return;
 
     const src = URL.createObjectURL(file);
@@ -944,10 +946,16 @@ export default function App() {
                 maxHeight: "calc(100svh - 38px)",
               }}
             >
-              <label className="floating-open-button" data-no-draw onPointerDown={(event) => event.stopPropagation()} aria-label="Open koi photo">
-                <input type="file" accept="image/*" onChange={loadImage} />
-                <ImagePlus size={19} />
-              </label>
+              <div className="image-source-actions" data-no-draw onPointerDown={(event) => event.stopPropagation()}>
+                <label className="source-action-button" aria-label="Open photo from album">
+                  <input type="file" accept="image/*" onChange={loadImage} />
+                  <ImagePlus size={19} />
+                </label>
+                <label className="source-action-button" aria-label="Take photo with camera">
+                  <input type="file" accept="image/*" capture="environment" onChange={loadImage} />
+                  <Camera size={19} />
+                </label>
+              </div>
 
               <div
                 ref={imageTransformRef}
@@ -1114,12 +1122,18 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <label className="empty-stage">
-              <input type="file" accept="image/*" onChange={loadImage} />
-              <span className="floating-open-button empty-open-icon">
-                <ImagePlus size={22} />
-              </span>
-            </label>
+            <div className="empty-stage">
+              <div className="empty-source-actions">
+                <label className="source-action-button" aria-label="Open photo from album">
+                  <input type="file" accept="image/*" onChange={loadImage} />
+                  <ImagePlus size={22} />
+                </label>
+                <label className="source-action-button" aria-label="Take photo with camera">
+                  <input type="file" accept="image/*" capture="environment" onChange={loadImage} />
+                  <Camera size={22} />
+                </label>
+              </div>
+            </div>
           )}
         </div>
       </section>
