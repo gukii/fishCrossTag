@@ -77,6 +77,8 @@ const STROKE_PADDING = 0.035;
 const MIN_VIEW_SCALE = 0.05;
 const MAX_VIEW_SCALE = 8;
 const VIEW_ZOOM_STEP = 1.2;
+const THUMB_MARGIN_X_BY_LENGTH = 0.22;
+const THUMB_MARGIN_Y_BY_LENGTH = 0.04;
 const DEFAULT_IMAGE_SRC = "/images/default-koi.jpg";
 const DEFAULT_IMAGE_NAME = "20_0.jpg";
 const HMR_TIME_KEY = "koi-tag-last-hot-reload";
@@ -178,6 +180,15 @@ function boxFromPointsWithMargin(points: Point[], marginX: number, marginY: numb
   };
 }
 
+function expandFreeBoxByPixels(box: Box, image: ImageInfo, marginXPx: number, marginYPx: number): Box {
+  return {
+    x: box.x - marginXPx / image.width,
+    y: box.y - marginYPx / image.height,
+    width: box.width + (marginXPx * 2) / image.width,
+    height: box.height + (marginYPx * 2) / image.height,
+  };
+}
+
 function simplifyStroke(points: Point[]) {
   if (points.length < 2) return points;
 
@@ -272,16 +283,29 @@ function correctionRotation(tag: KoiTag, image: ImageInfo) {
   return tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image);
 }
 
+function bodyLengthPx(tag: KoiTag, image: ImageInfo) {
+  const head = tag.bodyLine[0];
+  const tail = tag.bodyLine[tag.bodyLine.length - 1];
+  return Math.max(40, Math.hypot((head.x - tail.x) * image.width, (head.y - tail.y) * image.height));
+}
+
+function rotatedAnnotationPoints(tag: KoiTag, image: ImageInfo, rotation = correctionRotation(tag, image)) {
+  const center = correctionCenter(tag);
+  const sourcePoints = tag.finLine ? [...tag.bodyLine, ...tag.finLine] : tag.bodyLine;
+  return sourcePoints.map((point) => rotateImagePoint(point, center, rotation, image));
+}
+
 function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = correctionRotation(tag, image)) {
   if (tag.correctedBBoxEdited && tag.correctedBBox) return tag.correctedBBox;
 
-  const center = correctionCenter(tag);
-  const sourcePoints = tag.finLine ? [...tag.bodyLine, ...tag.finLine] : tag.bodyLine;
-  const rotatedPoints = sourcePoints.map((point) => rotateImagePoint(point, center, rotation, image));
-  const head = tag.bodyLine[0];
-  const tail = tag.bodyLine[tag.bodyLine.length - 1];
-  const lengthPx = Math.max(40, Math.hypot((head.x - tail.x) * image.width, (head.y - tail.y) * image.height));
-  return boxFromPointsWithMargin(rotatedPoints, (lengthPx * 0.22) / image.width, (lengthPx * 0.04) / image.height);
+  const rotatedPoints = rotatedAnnotationPoints(tag, image, rotation);
+  const fallbackMarginPx = tag.finLine ? 1 : bodyLengthPx(tag, image) * 0.04;
+  return boxFromPointsWithMargin(rotatedPoints, fallbackMarginPx / image.width, fallbackMarginPx / image.height);
+}
+
+function thumbDisplayCrop(tag: KoiTag, image: ImageInfo, correctedBox: Box) {
+  const lengthPx = bodyLengthPx(tag, image);
+  return expandFreeBoxByPixels(correctedBox, lengthPx * THUMB_MARGIN_X_BY_LENGTH, lengthPx * THUMB_MARGIN_Y_BY_LENGTH);
 }
 
 function orientedCorrectedBoxPoints(tag: KoiTag, image: ImageInfo) {
@@ -1174,7 +1198,7 @@ function CorrectedThumb({
   onSelect: () => void;
 }) {
   const geometry = useMemo(() => correctedGeometry(tag, image), [image, tag]);
-  const thumbCrop = geometry.correctedBox;
+  const thumbCrop = thumbDisplayCrop(tag, image, geometry.correctedBox);
 
   return (
     <button className={`thumb-card ${active ? "active" : ""}`} style={{ aspectRatio: `${thumbCrop.width * image.width} / ${thumbCrop.height * image.height}` }} onClick={onSelect}>
