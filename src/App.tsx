@@ -2,12 +2,14 @@ import { ChangeEvent, PointerEvent, RefObject, WheelEvent, useEffect, useMemo, u
 import {
   Camera,
   Check,
+  Download,
   ImagePlus,
   Minus,
   PanelBottomClose,
   PanelBottomOpen,
   Plus,
   RotateCcw,
+  Settings,
   Signature,
   Trash2,
   Undo2,
@@ -83,17 +85,25 @@ type CorrectedGeometry = {
   correctedBox: Box;
 };
 
+type CropSettings = {
+  marginXByLength: number;
+  marginYByLength: number;
+};
+
 const MIN_STROKE_POINTS = 3;
 const STROKE_PADDING = 0.035;
 const MIN_VIEW_SCALE = 0.05;
 const MAX_VIEW_SCALE = 8;
 const VIEW_ZOOM_STEP = 1.2;
 const AUTO_FINISH_AFTER_MS = 2000;
-const THUMB_MARGIN_X_BY_LENGTH = 0.22;
-const THUMB_MARGIN_Y_BY_LENGTH = 0.04;
+const DEFAULT_CROP_SETTINGS: CropSettings = {
+  marginXByLength: 0.22,
+  marginYByLength: 0.04,
+};
 const DEFAULT_IMAGE_SRC = `${import.meta.env.BASE_URL}images/default-koi.jpg`;
 const DEFAULT_IMAGE_NAME = "20_0.jpg";
 const HMR_TIME_KEY = "koi-tag-last-hot-reload";
+const CROP_SETTINGS_KEY = "koi-tag-crop-settings";
 
 function formatTime(date = new Date()) {
   return date.toLocaleTimeString([], {
@@ -115,6 +125,21 @@ if (import.meta.hot) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+function loadCropSettings(): CropSettings {
+  try {
+    const stored = localStorage.getItem(CROP_SETTINGS_KEY);
+    if (!stored) return DEFAULT_CROP_SETTINGS;
+    const parsed = JSON.parse(stored) as Partial<CropSettings>;
+
+    return {
+      marginXByLength: clamp(Number(parsed.marginXByLength ?? DEFAULT_CROP_SETTINGS.marginXByLength), 0, 2),
+      marginYByLength: clamp(Number(parsed.marginYByLength ?? DEFAULT_CROP_SETTINGS.marginYByLength), 0, 2),
+    };
+  } catch {
+    return DEFAULT_CROP_SETTINGS;
+  }
 }
 
 function normalizeBox(box: Box): Box {
@@ -393,9 +418,9 @@ function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = correction
   return boxFromPointsWithMargin(rotatedPoints, fallbackMarginPx / image.width, fallbackMarginPx / image.height);
 }
 
-function thumbDisplayCrop(tag: KoiTag, image: ImageInfo, correctedBox: Box) {
+function displayCrop(tag: KoiTag, image: ImageInfo, correctedBox: Box, settings: CropSettings) {
   const lengthPx = bodyLengthPx(tag, image);
-  const padded = expandFreeBoxByPixels(correctedBox, image, lengthPx * THUMB_MARGIN_X_BY_LENGTH, lengthPx * THUMB_MARGIN_Y_BY_LENGTH);
+  const padded = expandFreeBoxByPixels(correctedBox, image, lengthPx * settings.marginXByLength, lengthPx * settings.marginYByLength);
   return ensureMinBoxSizePixels(padded, image, lengthPx * 0.28, lengthPx * 0.65);
 }
 
@@ -461,6 +486,8 @@ export default function App() {
   const [activeTagId, setActiveTagId] = useState<string | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [cropSettings, setCropSettings] = useState<CropSettings>(loadCropSettings);
   const [editTarget, setEditTarget] = useState<EditTarget>("auto");
   const [hotReloadTime, setHotReloadTime] = useState(() => localStorage.getItem(HMR_TIME_KEY) ?? formatTime());
   const [hotReloadCopied, setHotReloadCopied] = useState(false);
@@ -475,6 +502,10 @@ export default function App() {
   useEffect(() => {
     viewRef.current = view;
   }, [view]);
+
+  useEffect(() => {
+    localStorage.setItem(CROP_SETTINGS_KEY, JSON.stringify(cropSettings));
+  }, [cropSettings]);
 
   useEffect(() => {
     function updateHotReloadTime(event: Event) {
@@ -671,6 +702,55 @@ export default function App() {
 
   function resetView() {
     setView({ scale: 1, x: 0, y: 0 });
+  }
+
+  function drawCorrectedCropToCanvas(canvas: HTMLCanvasElement, photo: HTMLImageElement, tag: KoiTag, crop: Box, rotation: number) {
+    const cropWidthPx = Math.max(1, Math.round(crop.width * image!.width));
+    const cropHeightPx = Math.max(1, Math.round(crop.height * image!.height));
+    canvas.width = cropWidthPx;
+    canvas.height = cropHeightPx;
+
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    const center = correctionCenter(tag);
+    const centerX = center.x * image!.width;
+    const centerY = center.y * image!.height;
+    const cropX = crop.x * image!.width;
+    const cropY = crop.y * image!.height;
+
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, cropWidthPx, cropHeightPx);
+    context.translate(-cropX, -cropY);
+    context.translate(centerX, centerY);
+    context.rotate((rotation * Math.PI) / 180);
+    context.translate(-centerX, -centerY);
+    context.drawImage(photo, 0, 0, image!.width, image!.height);
+  }
+
+  async function exportCorrectedCrops() {
+    if (!image || !tags.length) return;
+    const sourceImage = sourceImageRef.current;
+    if (!sourceImage) return;
+
+    const imageName = image.name.replace(/\.[^.]+$/, "") || "koi";
+    for (const [index, tag] of tags.entries()) {
+      const geometry = correctedGeometry(tag, image);
+      const crop = displayCrop(tag, image, geometry.correctedBox, cropSettings);
+      const canvas = document.createElement("canvas");
+      drawCorrectedCropToCanvas(canvas, sourceImage, tag, crop, geometry.rotation);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) continue;
+
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${imageName}-fish-${String(index + 1).padStart(2, "0")}.png`;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1200);
+    }
   }
 
   function bringTagIntoView(tag: KoiTag) {
@@ -1339,7 +1419,65 @@ export default function App() {
                 >
                   {drawerOpen ? <PanelBottomClose size={18} /> : <PanelBottomOpen size={18} />}
                 </Button>
+
+                <Button
+                  className="floating-mode-button"
+                  size="icon"
+                  variant={settingsOpen ? "default" : "secondary"}
+                  onClick={() => setSettingsOpen((open) => !open)}
+                  aria-label={settingsOpen ? "Hide settings" : "Show settings"}
+                >
+                  <Settings size={18} />
+                </Button>
               </div>
+
+              {settingsOpen && (
+                <section className="settings-panel" data-no-draw onPointerDown={(event) => event.stopPropagation()} aria-label="Crop settings">
+                  <div className="settings-row">
+                    <label>
+                      <span>Width margin</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="2"
+                        step="0.01"
+                        value={cropSettings.marginXByLength}
+                        onChange={(event) =>
+                          setCropSettings((current) => ({
+                            ...current,
+                            marginXByLength: clamp(Number(event.target.value), 0, 2),
+                          }))
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span>Height margin</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="2"
+                        step="0.01"
+                        value={cropSettings.marginYByLength}
+                        onChange={(event) =>
+                          setCropSettings((current) => ({
+                            ...current,
+                            marginYByLength: clamp(Number(event.target.value), 0, 2),
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+                  <div className="settings-actions">
+                    <Button size="sm" variant="secondary" onClick={() => setCropSettings(DEFAULT_CROP_SETTINGS)}>
+                      Reset
+                    </Button>
+                    <Button size="sm" onClick={exportCorrectedCrops} disabled={!tags.length}>
+                      <Download size={16} />
+                      Export
+                    </Button>
+                  </div>
+                </section>
+              )}
             </div>
           ) : (
             <div className="empty-stage">
@@ -1363,6 +1501,7 @@ export default function App() {
           image={image}
           tags={tags}
           activeTagId={activeTagId}
+          cropSettings={cropSettings}
           sourceImageRef={sourceImageRef}
           onClose={() => setDrawerOpen(false)}
           onDelete={deleteTagById}
@@ -1466,6 +1605,7 @@ function CorrectedThumbDrawer({
   image,
   tags,
   activeTagId,
+  cropSettings,
   sourceImageRef,
   onClose,
   onDelete,
@@ -1474,6 +1614,7 @@ function CorrectedThumbDrawer({
   image: ImageInfo;
   tags: KoiTag[];
   activeTagId: string | null;
+  cropSettings: CropSettings;
   sourceImageRef: RefObject<HTMLImageElement | null>;
   onClose: () => void;
   onDelete: (tagId: string) => void;
@@ -1493,6 +1634,7 @@ function CorrectedThumbDrawer({
               image={image}
               tag={tag}
               active={tag.id === activeTagId}
+              cropSettings={cropSettings}
               sourceImageRef={sourceImageRef}
               onDelete={() => onDelete(tag.id)}
               onSelect={() => onSelect(tag.id)}
@@ -1508,6 +1650,7 @@ function CorrectedThumb({
   image,
   tag,
   active,
+  cropSettings,
   sourceImageRef,
   onDelete,
   onSelect,
@@ -1515,12 +1658,13 @@ function CorrectedThumb({
   image: ImageInfo;
   tag: KoiTag;
   active: boolean;
+  cropSettings: CropSettings;
   sourceImageRef: RefObject<HTMLImageElement | null>;
   onDelete: () => void;
   onSelect: () => void;
 }) {
   const geometry = useMemo(() => correctedGeometry(tag, image), [image, tag]);
-  const thumbCrop = thumbDisplayCrop(tag, image, geometry.correctedBox);
+  const thumbCrop = displayCrop(tag, image, geometry.correctedBox, cropSettings);
 
   return (
     <button className={`thumb-card ${active ? "active" : ""}`} style={{ aspectRatio: `${thumbCrop.width * image.width} / ${thumbCrop.height * image.height}` }} onClick={onSelect}>
