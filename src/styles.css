@@ -295,6 +295,19 @@ h2 {
     0 3px 10px rgba(0, 0, 0, 0.4);
 }
 
+.head-undo-button {
+  position: absolute;
+  z-index: 7;
+  min-height: 38px;
+  width: 38px;
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  border-radius: 999px;
+  transform: translate(18px, -54px);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.34);
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
 .bbox.done {
   border-color: #71b5ff;
 }

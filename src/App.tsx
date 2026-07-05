@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Signature,
   Trash2,
+  Undo2,
   ZoomIn,
   X,
 } from "lucide-react";
@@ -55,6 +56,7 @@ type KoiTag = {
   correctedPoints?: Point[];
   status: "active" | "done";
   createdAt: string;
+  lastPaintedAt: string;
 };
 
 type ImageInfo = {
@@ -86,6 +88,7 @@ const STROKE_PADDING = 0.035;
 const MIN_VIEW_SCALE = 0.05;
 const MAX_VIEW_SCALE = 8;
 const VIEW_ZOOM_STEP = 1.2;
+const AUTO_FINISH_AFTER_MS = 2000;
 const THUMB_MARGIN_X_BY_LENGTH = 0.22;
 const THUMB_MARGIN_Y_BY_LENGTH = 0.04;
 const DEFAULT_IMAGE_SRC = `${import.meta.env.BASE_URL}images/default-koi.jpg`;
@@ -162,6 +165,54 @@ function expandBoxToPoints(box: Box, points: Point[]) {
     width: Math.max(box.x + box.width, pointsBox.x + pointsBox.width) - Math.min(box.x, pointsBox.x),
     height: Math.max(box.y + box.height, pointsBox.y + pointsBox.height) - Math.min(box.y, pointsBox.y),
   });
+}
+
+function pointSegmentDistance(point: Point, start: Point, end: Point) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq === 0) return Math.hypot(point.x - start.x, point.y - start.y);
+
+  const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSq, 0, 1);
+  return Math.hypot(point.x - (start.x + dx * t), point.y - (start.y + dy * t));
+}
+
+function segmentDistance(a: Point, b: Point, c: Point, d: Point) {
+  return Math.min(pointSegmentDistance(a, c, d), pointSegmentDistance(b, c, d), pointSegmentDistance(c, a, b), pointSegmentDistance(d, a, b));
+}
+
+function segmentIntersects(a: Point, b: Point, c: Point, d: Point) {
+  const cross = (p: Point, q: Point, r: Point) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const onSegment = (p: Point, q: Point, r: Point) =>
+    q.x >= Math.min(p.x, r.x) && q.x <= Math.max(p.x, r.x) && q.y >= Math.min(p.y, r.y) && q.y <= Math.max(p.y, r.y);
+  const abC = cross(a, b, c);
+  const abD = cross(a, b, d);
+  const cdA = cross(c, d, a);
+  const cdB = cross(c, d, b);
+  const epsilon = 0.000001;
+
+  if (Math.abs(abC) < epsilon && onSegment(a, c, b)) return true;
+  if (Math.abs(abD) < epsilon && onSegment(a, d, b)) return true;
+  if (Math.abs(cdA) < epsilon && onSegment(c, a, d)) return true;
+  if (Math.abs(cdB) < epsilon && onSegment(c, b, d)) return true;
+
+  return abC * abD < 0 && cdA * cdB < 0;
+}
+
+function strokesIntersect(a: Point[], b: Point[], tolerance = 0.025) {
+  for (let aIndex = 1; aIndex < a.length; aIndex += 1) {
+    for (let bIndex = 1; bIndex < b.length; bIndex += 1) {
+      const aStart = a[aIndex - 1];
+      const aEnd = a[aIndex];
+      const bStart = b[bIndex - 1];
+      const bEnd = b[bIndex];
+      if (segmentIntersects(aStart, aEnd, bStart, bEnd) || segmentDistance(aStart, aEnd, bStart, bEnd) <= tolerance) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function orderedBoxCorners(box: Box): Point[] {
@@ -693,13 +744,6 @@ export default function App() {
       return;
     }
 
-    if (activeTag && activeOrientedPoints) {
-      const point = pointFromPointer(event);
-      if (!point) return;
-      setDrag({ type: "finishTap", pointerId: event.pointerId, tagId: activeTag.id, startPoint: point, moved: false });
-      return;
-    }
-
     startStroke(event);
   }
 
@@ -820,6 +864,7 @@ export default function App() {
     if (stroke.length < MIN_STROKE_POINTS) return;
 
     if (activeTag && editTarget === "body") {
+      const paintedAt = new Date().toISOString();
       setTags((current) =>
         current.map((tag) => {
           if (tag.id !== activeTag.id) return tag;
@@ -832,6 +877,7 @@ export default function App() {
             correctedBBoxEdited: false,
             correctedPoints: undefined,
             correctionRotationDeg: undefined,
+            lastPaintedAt: paintedAt,
           };
         }),
       );
@@ -840,6 +886,7 @@ export default function App() {
     }
 
     if (activeTag && editTarget === "fin") {
+      const paintedAt = new Date().toISOString();
       setTags((current) =>
         current.map((tag) =>
           tag.id === activeTag.id
@@ -851,6 +898,7 @@ export default function App() {
                 correctedBBoxEdited: false,
                 correctedPoints: undefined,
                 correctionRotationDeg: undefined,
+                lastPaintedAt: paintedAt,
               }
             : tag,
         ),
@@ -859,7 +907,37 @@ export default function App() {
       return;
     }
 
-    if (activeTag && activeTag.status === "active") {
+    if (activeTag) {
+      const now = new Date();
+      const isFinLine = strokesIntersect(activeTag.bodyLine, stroke);
+
+      if (!isFinLine) {
+        const id = crypto.randomUUID();
+        const paintedAt = now.toISOString();
+        const previousWasQuiet = now.getTime() - new Date(activeTag.lastPaintedAt).getTime() >= AUTO_FINISH_AFTER_MS;
+        setTags((current) => [
+          ...current.map((tag) =>
+            tag.id === activeTag.id
+              ? {
+                  ...tag,
+                  status: tag.finLine || previousWasQuiet ? "done" : tag.status,
+                }
+              : tag,
+          ),
+          {
+            id,
+            bodyLine: stroke,
+            bbox: boxFromPoints(stroke),
+            status: "active",
+            createdAt: paintedAt,
+            lastPaintedAt: paintedAt,
+          },
+        ]);
+        setActiveTagId(id);
+        setEditTarget("auto");
+        return;
+      }
+
       setTags((current) =>
         current.map((tag) =>
           tag.id === activeTag.id
@@ -867,10 +945,12 @@ export default function App() {
                 ...tag,
                 finLine: stroke,
                 bbox: expandBoxToPoints(tag.bbox, stroke),
+                status: "done",
                 correctedBBox: undefined,
                 correctedBBoxEdited: false,
                 correctedPoints: undefined,
-                correctionRotationDeg: undefined,
+                correctionRotationDeg: image ? verticalLineRotation(tag.bodyLine, image) : undefined,
+                lastPaintedAt: now.toISOString(),
               }
             : tag,
         ),
@@ -879,6 +959,7 @@ export default function App() {
     }
 
     const id = crypto.randomUUID();
+    const paintedAt = new Date().toISOString();
     setTags((current) => [
       ...current,
       {
@@ -886,7 +967,8 @@ export default function App() {
         bodyLine: stroke,
         bbox: boxFromPoints(stroke),
         status: "active",
-        createdAt: new Date().toISOString(),
+        createdAt: paintedAt,
+        lastPaintedAt: paintedAt,
       },
     ]);
     setActiveTagId(id);
@@ -956,6 +1038,26 @@ export default function App() {
   function deleteActiveTag() {
     if (!activeTag) return;
     deleteTagById(activeTag.id);
+  }
+
+  function undoActiveFinLine() {
+    if (!activeTag?.finLine) return;
+    setTags((current) =>
+      current.map((tag) =>
+        tag.id === activeTag.id
+          ? {
+              ...tag,
+              finLine: undefined,
+              bbox: boxFromPoints(tag.bodyLine),
+              status: "active",
+              correctedBBox: undefined,
+              correctedBBoxEdited: false,
+              correctedPoints: undefined,
+              correctionRotationDeg: undefined,
+            }
+          : tag,
+      ),
+    );
   }
 
   function deleteTagById(tagId: string) {
@@ -1137,6 +1239,27 @@ export default function App() {
                     aria-label={`Select fish ${index + 1}`}
                   />
                 ))}
+
+                {activeTag?.finLine && (
+                  <Button
+                    className="head-undo-button"
+                    size="icon"
+                    variant="secondary"
+                    style={{
+                      left: `${activeTag.bodyLine[0].x * 100}%`,
+                      top: `${activeTag.bodyLine[0].y * 100}%`,
+                    }}
+                    data-no-draw
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      undoActiveFinLine();
+                    }}
+                    aria-label="Undo fin line"
+                  >
+                    <Undo2 size={17} />
+                  </Button>
+                )}
 
                 {activeTag && (
                   <div className="fish-actions" style={controlPosition(activeDisplayBox ?? activeTag.bbox)} data-no-draw onPointerDown={(event) => event.stopPropagation()}>
