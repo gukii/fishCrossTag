@@ -81,7 +81,7 @@ const MAX_VIEW_SCALE = 8;
 const VIEW_ZOOM_STEP = 1.2;
 const THUMB_MARGIN_X_BY_LENGTH = 0.22;
 const THUMB_MARGIN_Y_BY_LENGTH = 0.04;
-const DEFAULT_IMAGE_SRC = "/images/default-koi.jpg";
+const DEFAULT_IMAGE_SRC = `${import.meta.env.BASE_URL}images/default-koi.jpg`;
 const DEFAULT_IMAGE_NAME = "20_0.jpg";
 const HMR_TIME_KEY = "koi-tag-last-hot-reload";
 
