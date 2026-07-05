@@ -19,6 +19,7 @@ body,
   height: 100%;
   margin: 0;
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 button,
@@ -31,8 +32,12 @@ button {
 }
 
 .app-shell {
+  position: fixed;
+  inset: 0;
   width: 100vw;
+  height: 100vh;
   height: 100svh;
+  height: 100dvh;
   display: grid;
   grid-template-rows: 1fr;
   overflow: hidden;
@@ -59,6 +64,8 @@ button {
 }
 
 .workspace {
+  position: fixed;
+  inset: 0;
   min-width: 0;
   min-height: 0;
   display: grid;
@@ -121,6 +128,8 @@ h2 {
 }
 
 .stage-wrap {
+  position: fixed;
+  inset: 0;
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -130,15 +139,18 @@ h2 {
 
 .image-stage,
 .empty-stage {
-  width: 100%;
-  height: 100%;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100svh;
+  height: 100dvh;
   overflow: hidden;
   background: #161a18;
   box-shadow: none;
 }
 
 .image-stage {
-  position: relative;
   user-select: none;
   touch-action: none;
 }
