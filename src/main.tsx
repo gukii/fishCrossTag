@@ -4,7 +4,8 @@ import "./styles.css";
 import App from "./App";
 import AffinePrototype from "./AffinePrototype";
 
-const Root = window.location.pathname === "/affine" ? AffinePrototype : App;
+const routePath = window.location.pathname.replace(/^\/fishCrossTag/, "");
+const Root = routePath === "/affine" ? AffinePrototype : App;
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

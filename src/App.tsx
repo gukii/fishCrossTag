@@ -1,15 +1,15 @@
 import { ChangeEvent, PointerEvent, RefObject, WheelEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
-  Hand,
   ImagePlus,
   Minus,
-  MousePointer2,
   PanelBottomClose,
   PanelBottomOpen,
   Plus,
   RotateCcw,
+  Signature,
   Trash2,
+  ZoomIn,
   X,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
@@ -59,7 +59,8 @@ type ImageInfo = {
 type DragState =
   | { type: "stroke"; pointerId: number; points: Point[] }
   | { type: "bbox"; pointerId: number; tagId: string; handle: Handle; startBox: Box; startPoint: Point }
-  | { type: "rotate"; pointerId: number; tagId: string; startAngle: number; startRotation: number; center: Point };
+  | { type: "rotate"; pointerId: number; tagId: string; startAngle: number; startRotation: number; center: Point }
+  | { type: "finishTap"; pointerId: number; tagId: string; startPoint: Point; moved: boolean };
 
 type GestureState = {
   startView: ViewTransform;
@@ -592,6 +593,13 @@ export default function App() {
       return;
     }
 
+    if (activeTag && activeOrientedPoints) {
+      const point = pointFromPointer(event);
+      if (!point) return;
+      setDrag({ type: "finishTap", pointerId: event.pointerId, tagId: activeTag.id, startPoint: point, moved: false });
+      return;
+    }
+
     startStroke(event);
   }
 
@@ -628,6 +636,12 @@ export default function App() {
     if (!drag || drag.pointerId !== event.pointerId) return;
     const point = pointFromPointer(event, { clampToImage: drag.type !== "bbox" });
     if (!point) return;
+
+    if (drag.type === "finishTap") {
+      const moved = drag.moved || Math.hypot(point.x - drag.startPoint.x, point.y - drag.startPoint.y) > 0.01;
+      setDrag({ ...drag, moved });
+      return;
+    }
 
     if (drag.type === "stroke") {
       setDrag({ ...drag, points: [...drag.points, point] });
@@ -688,6 +702,15 @@ export default function App() {
     }
 
     if (drag.type === "bbox") {
+      setDrag(null);
+      return;
+    }
+
+    if (drag.type === "finishTap") {
+      const tagStillActive = activeTag?.id === drag.tagId;
+      if (!drag.moved && tagStillActive) {
+        finishTag();
+      }
       setDrag(null);
       return;
     }
@@ -1046,31 +1069,27 @@ export default function App() {
                   onClick={() => setMode((current) => (current === "move" ? "tag" : "move"))}
                   aria-label={mode === "move" ? "Switch to tagging" : "Switch to pan and zoom"}
                 >
-                  {mode === "move" ? <MousePointer2 size={19} /> : <Hand size={19} />}
+                  {mode === "move" ? <Signature size={19} /> : <ZoomIn size={19} />}
                 </Button>
 
-                {mode === "move" && (
-                  <>
-                    <Button
-                      className="floating-mode-button"
-                      size="icon"
-                      variant="secondary"
-                      onClick={() => zoomFromStageCenter(VIEW_ZOOM_STEP)}
-                      aria-label="Zoom in"
-                    >
-                      <Plus size={18} />
-                    </Button>
-                    <Button
-                      className="floating-mode-button"
-                      size="icon"
-                      variant="secondary"
-                      onClick={() => zoomFromStageCenter(1 / VIEW_ZOOM_STEP)}
-                      aria-label="Zoom out"
-                    >
-                      <Minus size={18} />
-                    </Button>
-                  </>
-                )}
+                <Button
+                  className="floating-mode-button"
+                  size="icon"
+                  variant="secondary"
+                  onClick={() => zoomFromStageCenter(VIEW_ZOOM_STEP)}
+                  aria-label="Zoom in"
+                >
+                  <Plus size={18} />
+                </Button>
+                <Button
+                  className="floating-mode-button"
+                  size="icon"
+                  variant="secondary"
+                  onClick={() => zoomFromStageCenter(1 / VIEW_ZOOM_STEP)}
+                  aria-label="Zoom out"
+                >
+                  <Minus size={18} />
+                </Button>
 
                 <Button
                   className="floating-mode-button"
