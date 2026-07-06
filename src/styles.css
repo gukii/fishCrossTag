@@ -445,6 +445,16 @@ h2 {
   background: rgba(31, 143, 102, 0.88);
 }
 
+.settings-dismiss {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  padding: 0;
+  background: transparent;
+  cursor: default;
+  touch-action: manipulation;
+}
+
 .settings-panel {
   position: fixed;
   right: max(68px, calc(env(safe-area-inset-right) + 68px));

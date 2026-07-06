@@ -1664,86 +1664,98 @@ export default function App() {
               </div>
 
               {settingsOpen && (
-                <section className="settings-panel" data-no-draw onPointerDown={(event) => event.stopPropagation()} aria-label="Crop settings">
-                  <div className="settings-row">
-                    <label>
-                      <span>Width margin</span>
-                      <input
-                        type="number"
-                        min="0"
-                        max="2"
-                        step="0.01"
-                        value={cropSettings.marginXByLength}
-                        onChange={(event) =>
-                          setCropSettings((current) => ({
-                            ...current,
-                            marginXByLength: clamp(Number(event.target.value), 0, 2),
-                          }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      <span>Height margin</span>
-                      <input
-                        type="number"
-                        min="0"
-                        max="2"
-                        step="0.01"
-                        value={cropSettings.marginYByLength}
-                        onChange={(event) =>
-                          setCropSettings((current) => ({
-                            ...current,
-                            marginYByLength: clamp(Number(event.target.value), 0, 2),
-                          }))
-                        }
-                      />
-                    </label>
-                    <label>
-                      <span>Cross offset</span>
-                      <input
-                        type="number"
-                        min="20"
-                        max="180"
-                        step="1"
-                        value={crosshairOffsetInput}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setCrosshairOffsetInput(value);
-                          const parsed = Number(value);
-                          if (value !== "" && Number.isFinite(parsed) && parsed >= 20 && parsed <= 180) {
+                <>
+                  <button
+                    className="settings-dismiss"
+                    type="button"
+                    data-no-draw
+                    aria-label="Close settings"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      setSettingsOpen(false);
+                    }}
+                  />
+                  <section className="settings-panel" data-no-draw onPointerDown={(event) => event.stopPropagation()} aria-label="Crop settings">
+                    <div className="settings-row">
+                      <label>
+                        <span>Width margin</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="2"
+                          step="0.01"
+                          value={cropSettings.marginXByLength}
+                          onChange={(event) =>
                             setCropSettings((current) => ({
                               ...current,
-                              crosshairOffsetPx: parsed,
-                            }));
+                              marginXByLength: clamp(Number(event.target.value), 0, 2),
+                            }))
                           }
-                        }}
-                        onBlur={() => commitCrosshairOffsetInput()}
-                      />
-                    </label>
-                    <label className="settings-toggle">
-                      <span>Show guide</span>
-                      <input
-                        type="checkbox"
-                        checked={cropSettings.showCrosshairIntro}
-                        onChange={(event) =>
-                          setCropSettings((current) => ({
-                            ...current,
-                            showCrosshairIntro: event.target.checked,
-                          }))
-                        }
-                      />
-                    </label>
-                  </div>
-                  <div className="settings-actions">
-                    <Button size="sm" variant="secondary" onClick={() => setCropSettings(DEFAULT_CROP_SETTINGS)}>
-                      Reset
-                    </Button>
-                    <Button size="sm" onClick={exportCorrectedCrops} disabled={!tags.length}>
-                      <Download size={16} />
-                      Export
-                    </Button>
-                  </div>
-                </section>
+                        />
+                      </label>
+                      <label>
+                        <span>Height margin</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="2"
+                          step="0.01"
+                          value={cropSettings.marginYByLength}
+                          onChange={(event) =>
+                            setCropSettings((current) => ({
+                              ...current,
+                              marginYByLength: clamp(Number(event.target.value), 0, 2),
+                            }))
+                          }
+                        />
+                      </label>
+                      <label>
+                        <span>Cross offset</span>
+                        <input
+                          type="number"
+                          min="20"
+                          max="180"
+                          step="1"
+                          value={crosshairOffsetInput}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setCrosshairOffsetInput(value);
+                            const parsed = Number(value);
+                            if (value !== "" && Number.isFinite(parsed) && parsed >= 20 && parsed <= 180) {
+                              setCropSettings((current) => ({
+                                ...current,
+                                crosshairOffsetPx: parsed,
+                              }));
+                            }
+                          }}
+                          onBlur={() => commitCrosshairOffsetInput()}
+                        />
+                      </label>
+                      <label className="settings-toggle">
+                        <span>Show guide</span>
+                        <input
+                          type="checkbox"
+                          checked={cropSettings.showCrosshairIntro}
+                          onChange={(event) =>
+                            setCropSettings((current) => ({
+                              ...current,
+                              showCrosshairIntro: event.target.checked,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                    <div className="settings-actions">
+                      <Button size="sm" variant="secondary" onClick={() => setCropSettings(DEFAULT_CROP_SETTINGS)}>
+                        Reset
+                      </Button>
+                      <Button size="sm" onClick={exportCorrectedCrops} disabled={!tags.length}>
+                        <Download size={16} />
+                        Export
+                      </Button>
+                    </div>
+                  </section>
+                </>
               )}
 
               {showCrosshairIntro && (
