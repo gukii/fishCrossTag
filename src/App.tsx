@@ -502,7 +502,8 @@ export default function App() {
   const [drag, setDrag] = useState<DragState | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [cropSettings, setCropSettings] = useState<CropSettings>(loadCropSettings);
+  const [cropSettings, setCropSettings] = useState<CropSettings>(() => loadCropSettings());
+  const [crosshairOffsetInput, setCrosshairOffsetInput] = useState(() => String(loadCropSettings().crosshairOffsetPx));
   const [showCrosshairIntro, setShowCrosshairIntro] = useState(false);
   const [editTarget, setEditTarget] = useState<EditTarget>("auto");
   const [hotReloadTime, setHotReloadTime] = useState(() => localStorage.getItem(HMR_TIME_KEY) ?? formatTime());
@@ -522,6 +523,20 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(CROP_SETTINGS_KEY, JSON.stringify(cropSettings));
   }, [cropSettings]);
+
+  useEffect(() => {
+    setCrosshairOffsetInput(String(cropSettings.crosshairOffsetPx));
+  }, [cropSettings.crosshairOffsetPx]);
+
+  function commitCrosshairOffsetInput(value = crosshairOffsetInput) {
+    const parsed = Number(value);
+    const next = Number.isFinite(parsed) ? clamp(parsed, 20, 180) : DEFAULT_CROP_SETTINGS.crosshairOffsetPx;
+    setCropSettings((current) => ({
+      ...current,
+      crosshairOffsetPx: next,
+    }));
+    setCrosshairOffsetInput(String(next));
+  }
 
   useEffect(() => {
     function updateHotReloadTime(event: Event) {
@@ -1659,13 +1674,19 @@ export default function App() {
                         min="20"
                         max="180"
                         step="1"
-                        value={cropSettings.crosshairOffsetPx}
-                        onChange={(event) =>
-                          setCropSettings((current) => ({
-                            ...current,
-                            crosshairOffsetPx: clamp(Number(event.target.value), 20, 180),
-                          }))
-                        }
+                        value={crosshairOffsetInput}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setCrosshairOffsetInput(value);
+                          const parsed = Number(value);
+                          if (value !== "" && Number.isFinite(parsed) && parsed >= 20 && parsed <= 180) {
+                            setCropSettings((current) => ({
+                              ...current,
+                              crosshairOffsetPx: parsed,
+                            }));
+                          }
+                        }}
+                        onBlur={() => commitCrosshairOffsetInput()}
                       />
                     </label>
                     <label className="settings-toggle">
