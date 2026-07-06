@@ -97,8 +97,8 @@ const MAX_VIEW_SCALE = 8;
 const VIEW_ZOOM_STEP = 1.2;
 const AUTO_FINISH_AFTER_MS = 2000;
 const DEFAULT_CROP_SETTINGS: CropSettings = {
-  marginXByLength: 0.22,
-  marginYByLength: 0.04,
+  marginXByLength: 0.1,
+  marginYByLength: 0.1,
 };
 const DEFAULT_IMAGE_SRC = `${import.meta.env.BASE_URL}images/default-koi.jpg`;
 const DEFAULT_IMAGE_NAME = "20_0.jpg";
@@ -132,10 +132,13 @@ function loadCropSettings(): CropSettings {
     const stored = localStorage.getItem(CROP_SETTINGS_KEY);
     if (!stored) return DEFAULT_CROP_SETTINGS;
     const parsed = JSON.parse(stored) as Partial<CropSettings>;
+    const storedX = Number(parsed.marginXByLength ?? DEFAULT_CROP_SETTINGS.marginXByLength);
+    const storedY = Number(parsed.marginYByLength ?? DEFAULT_CROP_SETTINGS.marginYByLength);
+    if (storedX === 0.22 && storedY === 0.04) return DEFAULT_CROP_SETTINGS;
 
     return {
-      marginXByLength: clamp(Number(parsed.marginXByLength ?? DEFAULT_CROP_SETTINGS.marginXByLength), 0, 2),
-      marginYByLength: clamp(Number(parsed.marginYByLength ?? DEFAULT_CROP_SETTINGS.marginYByLength), 0, 2),
+      marginXByLength: clamp(storedX, 0, 2),
+      marginYByLength: clamp(storedY, 0, 2),
     };
   } catch {
     return DEFAULT_CROP_SETTINGS;
@@ -627,6 +630,47 @@ export default function App() {
     };
   }
 
+  function imagePointToScreen(point: Point) {
+    const rect = imageTransformRef.current?.getBoundingClientRect();
+    if (!rect) return null;
+    return {
+      x: rect.left + point.x * rect.width,
+      y: rect.top + point.y * rect.height,
+    };
+  }
+
+  function isPointNearActiveHarness(point: Point) {
+    if (!activeOrientedPoints) return false;
+
+    const screenPoint = imagePointToScreen(point);
+    if (!screenPoint) return false;
+    const screenPoints = activeOrientedPoints.map(imagePointToScreen);
+    if (screenPoints.some((current) => !current)) return false;
+    const polygon = screenPoints as Point[];
+    const center = imagePointToScreen(polygonCenter(activeOrientedPoints));
+    const tolerancePx = 54;
+
+    if (center && Math.hypot(screenPoint.x - center.x, screenPoint.y - center.y) <= tolerancePx) return true;
+    if (polygon.some((corner) => Math.hypot(screenPoint.x - corner.x, screenPoint.y - corner.y) <= tolerancePx)) return true;
+
+    for (let index = 0; index < polygon.length; index += 1) {
+      const start = polygon[index];
+      const end = polygon[(index + 1) % polygon.length];
+      if (pointSegmentDistance(screenPoint, start, end) <= tolerancePx) return true;
+    }
+
+    let inside = false;
+    for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) {
+      const current = polygon[index];
+      const last = polygon[previous];
+      if ((current.y > screenPoint.y) !== (last.y > screenPoint.y) && screenPoint.x < ((last.x - current.x) * (screenPoint.y - current.y)) / (last.y - current.y) + current.x) {
+        inside = !inside;
+      }
+    }
+
+    return inside;
+  }
+
   function screenPointFromEvent(event: PointerEvent<HTMLElement> | globalThis.PointerEvent): Point {
     return {
       x: event.clientX,
@@ -721,6 +765,8 @@ export default function App() {
 
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.clearRect(0, 0, cropWidthPx, cropHeightPx);
+    context.fillStyle = "#111614";
+    context.fillRect(0, 0, cropWidthPx, cropHeightPx);
     context.translate(-cropX, -cropY);
     context.translate(centerX, centerY);
     context.rotate((rotation * Math.PI) / 180);
@@ -732,25 +778,44 @@ export default function App() {
     if (!image || !tags.length) return;
     const sourceImage = sourceImageRef.current;
     if (!sourceImage) return;
+    const exportWindow = window.open("", "_blank");
+    exportWindow?.document.write("<title>Koi export</title><body style=\"margin:0;background:#111614;color:white;font-family:sans-serif\">Preparing export...</body>");
 
-    const imageName = image.name.replace(/\.[^.]+$/, "") || "koi";
-    for (const [index, tag] of tags.entries()) {
+    const cropCanvases = tags.map((tag) => {
       const geometry = correctedGeometry(tag, image);
       const crop = displayCrop(tag, image, geometry.correctedBox, cropSettings);
       const canvas = document.createElement("canvas");
       drawCorrectedCropToCanvas(canvas, sourceImage, tag, crop, geometry.rotation);
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
-      if (!blob) continue;
+      return canvas;
+    });
+    const targetHeight = Math.max(...cropCanvases.map((canvas) => canvas.height));
+    const gap = Math.max(16, Math.round(targetHeight * 0.04));
+    const scaledWidths = cropCanvases.map((canvas) => Math.max(1, Math.round((canvas.width / canvas.height) * targetHeight)));
+    const outputCanvas = document.createElement("canvas");
+    outputCanvas.width = scaledWidths.reduce((sum, width) => sum + width, 0) + gap * Math.max(0, cropCanvases.length - 1);
+    outputCanvas.height = targetHeight;
 
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `${imageName}-fish-${String(index + 1).padStart(2, "0")}.jpg`;
-      document.body.append(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1200);
+    const context = outputCanvas.getContext("2d");
+    if (!context) return;
+    context.fillStyle = "#111614";
+    context.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
+
+    let x = 0;
+    cropCanvases.forEach((canvas, index) => {
+      context.drawImage(canvas, x, 0, scaledWidths[index], targetHeight);
+      x += scaledWidths[index] + gap;
+    });
+
+    const blob = await new Promise<Blob | null>((resolve) => outputCanvas.toBlob(resolve, "image/jpeg", 0.92));
+    if (!blob) return;
+
+    const url = URL.createObjectURL(blob);
+    if (exportWindow) {
+      exportWindow.location.href = url;
+    } else {
+      window.open(url, "_blank");
     }
+    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
   }
 
   function bringTagIntoView(tag: KoiTag) {
@@ -761,7 +826,7 @@ export default function App() {
     const drawerRect = document.querySelector<HTMLElement>(".thumb-drawer")?.getBoundingClientRect();
     const coveredBottom = drawerRect ? Math.max(0, stageRect.bottom - drawerRect.top) : 0;
     const visibleHeight = Math.max(80, stageRect.height - coveredBottom);
-    const screenPadding = 28;
+    const screenPadding = 24;
     const availableWidth = Math.max(80, stageRect.width - screenPadding * 2);
     const availableHeight = Math.max(80, visibleHeight - screenPadding * 2);
     const focusedTag: KoiTag = {
@@ -769,13 +834,11 @@ export default function App() {
       correctionRotationDeg: tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image),
     };
     const focusBox = boxFromPointsWithMargin(orientedCorrectedBoxPoints(focusedTag, image), 0, 0);
-    const currentScale = viewRef.current.scale;
-    const fitScale = Math.min(
-      currentScale,
-      availableWidth / Math.max(1, focusBox.width * frame.width),
-      availableHeight / Math.max(1, focusBox.height * frame.height),
+    const targetScale = Math.min(
+      (availableWidth * 0.8) / Math.max(1, focusBox.width * frame.width),
+      (availableHeight * 0.8) / Math.max(1, focusBox.height * frame.height),
     );
-    const nextScale = clamp(fitScale, MIN_VIEW_SCALE, MAX_VIEW_SCALE);
+    const nextScale = clamp(targetScale, MIN_VIEW_SCALE, MAX_VIEW_SCALE);
     const center = boxCenter(focusBox);
     const targetX = stageRect.width / 2;
     const targetY = visibleHeight / 2;
@@ -821,6 +884,11 @@ export default function App() {
     if (mode === "move" || activePointers.current.size > 1) {
       setDrag(null);
       beginGesture();
+      return;
+    }
+
+    const point = pointFromPointer(event, { clampToImage: false });
+    if (point && isPointNearActiveHarness(point)) {
       return;
     }
 
@@ -1555,11 +1623,6 @@ function RotatedCropCanvas({
       context.rotate((rotation * Math.PI) / 180);
       context.translate(-centerX, -centerY);
       context.drawImage(photo, 0, 0, image.width, image.height);
-
-      drawCanvasLine(context, tag.bodyLine, image, "#ffd348", 10);
-      if (tag.finLine) {
-        drawCanvasLine(context, tag.finLine, image, "#55e5ff", 8);
-      }
     }
 
     const sourceImage = sourceImageRef.current;
@@ -1574,31 +1637,6 @@ function RotatedCropCanvas({
   }, [crop, image, rotation, sourceImageRef, tag]);
 
   return <canvas ref={canvasRef} className={className} />;
-}
-
-function drawCanvasLine(context: CanvasRenderingContext2D, points: Point[], image: ImageInfo, color: string, width: number) {
-  if (points.length < 2) return;
-
-  context.save();
-  context.beginPath();
-  points.forEach((point, index) => {
-    const x = point.x * image.width;
-    const y = point.y * image.height;
-    if (index === 0) {
-      context.moveTo(x, y);
-      return;
-    }
-    context.lineTo(x, y);
-  });
-  context.lineWidth = width;
-  context.lineCap = "round";
-  context.lineJoin = "round";
-  context.strokeStyle = color;
-  context.shadowColor = "rgba(0, 0, 0, 0.72)";
-  context.shadowBlur = 2;
-  context.shadowOffsetY = 1;
-  context.stroke();
-  context.restore();
 }
 
 function CorrectedThumbDrawer({

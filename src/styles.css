@@ -412,6 +412,7 @@ h2 {
   background: rgba(255, 255, 255, 0.94);
   box-shadow: 0 18px 48px rgba(12, 17, 15, 0.28);
   backdrop-filter: blur(18px);
+  transform: none;
   touch-action: manipulation;
 }
 
@@ -437,6 +438,7 @@ h2 {
   padding: 0 8px;
   color: #18201d;
   background: #fff;
+  font-size: 16px;
   font-weight: 800;
 }
 
