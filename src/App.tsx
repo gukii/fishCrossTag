@@ -93,6 +93,7 @@ type CropSettings = {
   marginYByLength: number;
   crosshairOffsetPx: number;
   showCrosshairIntro: boolean;
+  showExportNumbers: boolean;
 };
 
 const MIN_STROKE_POINTS = 3;
@@ -106,6 +107,7 @@ const DEFAULT_CROP_SETTINGS: CropSettings = {
   marginYByLength: 0.1,
   crosshairOffsetPx: 50,
   showCrosshairIntro: true,
+  showExportNumbers: true,
 };
 const DEFAULT_IMAGE_SRC = `${import.meta.env.BASE_URL}images/default-koi.jpg`;
 const DEFAULT_IMAGE_NAME = "20_0.jpg";
@@ -149,6 +151,7 @@ function loadCropSettings(): CropSettings {
       marginYByLength: clamp(storedY, 0, 2),
       crosshairOffsetPx: storedCrosshairOffset === 84 ? DEFAULT_CROP_SETTINGS.crosshairOffsetPx : clamp(storedCrosshairOffset, 20, 180),
       showCrosshairIntro: parsed.showCrosshairIntro ?? DEFAULT_CROP_SETTINGS.showCrosshairIntro,
+      showExportNumbers: parsed.showExportNumbers ?? DEFAULT_CROP_SETTINGS.showExportNumbers,
     };
   } catch {
     return DEFAULT_CROP_SETTINGS;
@@ -862,7 +865,9 @@ export default function App() {
       const crop = displayCrop(tag, image, geometry.correctedBox, cropSettings);
       const canvas = document.createElement("canvas");
       drawCorrectedCropToCanvas(canvas, sourceImage, tag, crop, geometry.rotation);
-      drawExportNumberBadge(canvas, index + 1);
+      if (cropSettings.showExportNumbers) {
+        drawExportNumberBadge(canvas, index + 1);
+      }
       return canvas;
     });
     const targetHeight = Math.max(...cropCanvases.map((canvas) => canvas.height));
@@ -1740,6 +1745,19 @@ export default function App() {
                             setCropSettings((current) => ({
                               ...current,
                               showCrosshairIntro: event.target.checked,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="settings-toggle">
+                        <span>Export numbers</span>
+                        <input
+                          type="checkbox"
+                          checked={cropSettings.showExportNumbers}
+                          onChange={(event) =>
+                            setCropSettings((current) => ({
+                              ...current,
+                              showExportNumbers: event.target.checked,
                             }))
                           }
                         />
