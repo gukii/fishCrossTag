@@ -739,13 +739,13 @@ export default function App() {
       const crop = displayCrop(tag, image, geometry.correctedBox, cropSettings);
       const canvas = document.createElement("canvas");
       drawCorrectedCropToCanvas(canvas, sourceImage, tag, crop, geometry.rotation);
-      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
       if (!blob) continue;
 
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `${imageName}-fish-${String(index + 1).padStart(2, "0")}.png`;
+      anchor.download = `${imageName}-fish-${String(index + 1).padStart(2, "0")}.jpg`;
       document.body.append(anchor);
       anchor.click();
       anchor.remove();
