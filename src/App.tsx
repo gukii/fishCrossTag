@@ -1445,7 +1445,7 @@ export default function App() {
                   onClick={() => setMode((current) => (current === "move" ? "tag" : "move"))}
                   aria-label={mode === "move" ? "Switch to tagging" : "Switch to pan and zoom"}
                 >
-                  {mode === "move" ? <Signature size={19} /> : <ZoomIn size={19} />}
+                  {mode === "move" ? <ZoomIn size={19} /> : <Signature size={19} />}
                 </Button>
 
                 <Button
