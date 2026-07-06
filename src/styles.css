@@ -233,6 +233,31 @@ h2 {
   stroke-width: 18;
 }
 
+.aim-crosshair {
+  position: absolute;
+  z-index: 8;
+  width: 48px;
+  height: 48px;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  border-radius: 50%;
+  background:
+    linear-gradient(#ffd348, #ffd348) center / 28px 3px no-repeat,
+    linear-gradient(90deg, #ffd348, #ffd348) center / 3px 28px no-repeat,
+    rgba(20, 28, 24, 0.24);
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, 0.42),
+    0 5px 16px rgba(0, 0, 0, 0.34);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.aim-crosshair.painting {
+  background:
+    linear-gradient(#55e5ff, #55e5ff) center / 30px 3px no-repeat,
+    linear-gradient(90deg, #55e5ff, #55e5ff) center / 3px 30px no-repeat,
+    rgba(20, 28, 24, 0.3);
+}
+
 .head-dot,
 .active-head-dot {
   fill: #f04c3b;

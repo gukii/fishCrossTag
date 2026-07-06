@@ -2,7 +2,9 @@ import { ChangeEvent, PointerEvent, RefObject, WheelEvent, useEffect, useMemo, u
 import {
   Camera,
   Check,
+  Crosshair,
   Download,
+  Fingerprint,
   ImagePlus,
   Minus,
   PanelBottomClose,
@@ -19,6 +21,7 @@ import {
 import { Button } from "./components/ui/button";
 
 type Mode = "tag" | "move";
+type PaintMode = "direct" | "crosshair";
 type Handle = "nw" | "ne" | "sw" | "se" | "move";
 type EditTarget = "auto" | "body" | "fin";
 
@@ -69,7 +72,7 @@ type ImageInfo = {
 };
 
 type DragState =
-  | { type: "stroke"; pointerId: number; points: Point[] }
+  | { type: "stroke"; pointerId: number; points: Point[]; source: "direct" | "crosshair" }
   | { type: "bbox"; pointerId: number; tagId: string; handle: Handle; startBox: Box; startPoint: Point }
   | { type: "rotate"; pointerId: number; tagId: string; startAngle: number; startRotation: number; center: Point }
   | { type: "finishTap"; pointerId: number; tagId: string; startPoint: Point; moved: boolean };
@@ -479,11 +482,14 @@ export default function App() {
   const imageTransformRef = useRef<HTMLDivElement | null>(null);
   const sourceImageRef = useRef<HTMLImageElement | null>(null);
   const activePointers = useRef<Map<number, Point>>(new Map());
+  const aimPointerId = useRef<number | null>(null);
   const gesture = useRef<GestureState | null>(null);
   const viewRef = useRef<ViewTransform>({ scale: 1, x: 0, y: 0 });
   const [image, setImage] = useState<ImageInfo | null>(null);
   const [stageSize, setStageSize] = useState<PixelRect>({ x: 0, y: 0, width: 0, height: 0 });
   const [mode, setMode] = useState<Mode>("tag");
+  const [paintMode, setPaintMode] = useState<PaintMode>("direct");
+  const [aimPoint, setAimPoint] = useState<Point | null>(null);
   const [view, setView] = useState<ViewTransform>({ scale: 1, x: 0, y: 0 });
   const [tags, setTags] = useState<KoiTag[]>([]);
   const [activeTagId, setActiveTagId] = useState<string | null>(null);
@@ -613,6 +619,16 @@ export default function App() {
 
   function pointFromPointer(event: PointerEvent<HTMLElement>, options?: { clampToImage?: boolean }) {
     return pointFromClient(event.clientX, event.clientY, options);
+  }
+
+  function crosshairPointFromClient(clientX: number, clientY: number, options?: { clampToImage?: boolean }) {
+    return pointFromClient(clientX, clientY - 84, options);
+  }
+
+  function currentCrosshairPoint(options?: { clampToImage?: boolean }) {
+    const pointerId = aimPointerId.current;
+    const pointer = pointerId == null ? null : activePointers.current.get(pointerId);
+    return pointer ? crosshairPointFromClient(pointer.x, pointer.y, options) : null;
   }
 
   function pointFromClient(clientX: number, clientY: number, options: { clampToImage?: boolean } = {}) {
@@ -865,13 +881,17 @@ export default function App() {
     gesture.current = null;
   }
 
+  function startStrokeAtPoint(event: PointerEvent<HTMLDivElement>, point: Point, source: "direct" | "crosshair") {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDrag({ type: "stroke", pointerId: event.pointerId, points: [point], source });
+  }
+
   function startStroke(event: PointerEvent<HTMLDivElement>) {
     if (!image || mode !== "tag" || (event.target as HTMLElement).closest("[data-no-draw]")) return;
     const point = pointFromPointer(event);
     if (!point) return;
 
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setDrag({ type: "stroke", pointerId: event.pointerId, points: [point] });
+    startStrokeAtPoint(event, point, "direct");
   }
 
   function handleStagePointerDown(event: PointerEvent<HTMLDivElement>) {
@@ -881,9 +901,30 @@ export default function App() {
     activePointers.current.set(event.pointerId, screenPointFromEvent(event));
     event.currentTarget.setPointerCapture(event.pointerId);
 
-    if (mode === "move" || activePointers.current.size > 1) {
+    if (mode === "move") {
       setDrag(null);
       beginGesture();
+      return;
+    }
+
+    if (paintMode === "crosshair") {
+      if (aimPointerId.current == null) {
+        aimPointerId.current = event.pointerId;
+      }
+      const point = currentCrosshairPoint() ?? crosshairPointFromClient(event.clientX, event.clientY);
+      if (point) setAimPoint(point);
+
+      if (activePointers.current.size < 2) {
+        return;
+      }
+
+      if (point && !drag) {
+        startStrokeAtPoint(event, point, "crosshair");
+      }
+      return;
+    }
+
+    if (activePointers.current.size > 1) {
       return;
     }
 
@@ -901,6 +942,14 @@ export default function App() {
     }
 
     if (gesture.current || activePointers.current.size > 1) {
+      if (mode === "tag" && paintMode === "crosshair") {
+        if (event.pointerId === aimPointerId.current) {
+          const point = crosshairPointFromClient(event.clientX, event.clientY);
+          if (point) setAimPoint(point);
+        }
+        continueDrag(event);
+        return;
+      }
       if (!gesture.current) {
         setDrag(null);
         beginGesture();
@@ -909,25 +958,56 @@ export default function App() {
       return;
     }
 
+    if (mode === "tag" && paintMode === "crosshair") {
+      if (event.pointerId === aimPointerId.current) {
+        const point = crosshairPointFromClient(event.clientX, event.clientY);
+        if (point) setAimPoint(point);
+      }
+      return;
+    }
+
     continueDrag(event);
   }
 
   function handleStagePointerEnd(event: PointerEvent<HTMLDivElement>) {
-    if (!gesture.current) {
+    if (!gesture.current && !(mode === "tag" && paintMode === "crosshair")) {
       finishDrag(event);
     }
 
     activePointers.current.delete(event.pointerId);
+    if (event.pointerId === aimPointerId.current) {
+      aimPointerId.current = activePointers.current.keys().next().value ?? null;
+    }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    if (mode === "tag" && paintMode === "crosshair") {
+      if (activePointers.current.size < 2 && drag?.type === "stroke") {
+        finishDrag(event);
+      }
+      resetGestureForRemainingPointers();
+      return;
+    }
+
     resetGestureForRemainingPointers();
   }
 
   function continueDrag(event: PointerEvent<HTMLDivElement>) {
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    const point = pointFromPointer(event, { clampToImage: drag.type !== "bbox" });
+    if (!drag) return;
+    if (drag.type === "stroke" && drag.source === "crosshair") {
+      if (event.pointerId !== aimPointerId.current) return;
+    } else if (drag.pointerId !== event.pointerId) {
+      return;
+    }
+    const point =
+      drag.type === "stroke" && drag.source === "crosshair"
+        ? crosshairPointFromClient(event.clientX, event.clientY, { clampToImage: true })
+        : pointFromPointer(event, { clampToImage: drag.type !== "bbox" });
     if (!point) return;
+
+    if (drag.type === "stroke" && drag.source === "crosshair") {
+      setAimPoint(point);
+    }
 
     if (drag.type === "finishTap") {
       const moved = drag.moved || Math.hypot(point.x - drag.startPoint.x, point.y - drag.startPoint.y) > 0.01;
@@ -1367,6 +1447,10 @@ export default function App() {
                   </>
                 )}
 
+                {mode === "tag" && paintMode === "crosshair" && aimPoint && (
+                  <span className={`aim-crosshair ${drag?.type === "stroke" ? "painting" : ""}`} style={pointHandleStyle(aimPoint)} aria-hidden="true" />
+                )}
+
                 {tags.map((tag, index) => (
                   <button
                     key={`${tag.id}-head-select`}
@@ -1446,6 +1530,21 @@ export default function App() {
                   aria-label={mode === "move" ? "Switch to tagging" : "Switch to pan and zoom"}
                 >
                   {mode === "move" ? <ZoomIn size={19} /> : <Signature size={19} />}
+                </Button>
+
+                <Button
+                  className="floating-mode-button"
+                  size="icon"
+                  variant={paintMode === "crosshair" ? "default" : "secondary"}
+                  onClick={() => {
+                    setPaintMode((current) => (current === "crosshair" ? "direct" : "crosshair"));
+                    setAimPoint(null);
+                    setDrag(null);
+                    aimPointerId.current = null;
+                  }}
+                  aria-label={paintMode === "crosshair" ? "Use direct finger painting" : "Use crosshair painting"}
+                >
+                  {paintMode === "crosshair" ? <Crosshair size={18} /> : <Fingerprint size={18} />}
                 </Button>
 
                 <Button
