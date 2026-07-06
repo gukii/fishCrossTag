@@ -104,7 +104,7 @@ const AUTO_FINISH_AFTER_MS = 2000;
 const DEFAULT_CROP_SETTINGS: CropSettings = {
   marginXByLength: 0.1,
   marginYByLength: 0.1,
-  crosshairOffsetPx: 84,
+  crosshairOffsetPx: 50,
   showCrosshairIntro: true,
 };
 const DEFAULT_IMAGE_SRC = `${import.meta.env.BASE_URL}images/default-koi.jpg`;
@@ -141,12 +141,13 @@ function loadCropSettings(): CropSettings {
     const parsed = JSON.parse(stored) as Partial<CropSettings>;
     const storedX = Number(parsed.marginXByLength ?? DEFAULT_CROP_SETTINGS.marginXByLength);
     const storedY = Number(parsed.marginYByLength ?? DEFAULT_CROP_SETTINGS.marginYByLength);
+    const storedCrosshairOffset = Number(parsed.crosshairOffsetPx ?? DEFAULT_CROP_SETTINGS.crosshairOffsetPx);
     if (storedX === 0.22 && storedY === 0.04) return DEFAULT_CROP_SETTINGS;
 
     return {
       marginXByLength: clamp(storedX, 0, 2),
       marginYByLength: clamp(storedY, 0, 2),
-      crosshairOffsetPx: clamp(Number(parsed.crosshairOffsetPx ?? DEFAULT_CROP_SETTINGS.crosshairOffsetPx), 20, 180),
+      crosshairOffsetPx: storedCrosshairOffset === 84 ? DEFAULT_CROP_SETTINGS.crosshairOffsetPx : clamp(storedCrosshairOffset, 20, 180),
       showCrosshairIntro: parsed.showCrosshairIntro ?? DEFAULT_CROP_SETTINGS.showCrosshairIntro,
     };
   } catch {
