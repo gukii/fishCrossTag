@@ -838,6 +838,7 @@ export default function App() {
     const y = canvas.height - radius - Math.round(radius * 0.35);
 
     context.save();
+    context.setTransform(1, 0, 0, 1, 0, 0);
     context.shadowColor = "rgba(0, 0, 0, 0.72)";
     context.shadowBlur = Math.max(6, Math.round(radius * 0.18));
     context.shadowOffsetY = Math.max(2, Math.round(radius * 0.05));
