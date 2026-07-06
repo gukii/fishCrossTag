@@ -1557,7 +1557,7 @@ export default function App() {
                 </label>
 
                 <Button
-                  className="floating-mode-button"
+                  className="floating-mode-button mode-toggle-button"
                   size="icon"
                   variant={mode === "move" ? "default" : "secondary"}
                   onClick={() => setMode((current) => (current === "move" ? "tag" : "move"))}
@@ -1567,7 +1567,7 @@ export default function App() {
                 </Button>
 
                 <Button
-                  className="floating-mode-button"
+                  className="floating-mode-button paint-tool-button"
                   size="icon"
                   variant={paintMode === "crosshair" ? "default" : "secondary"}
                   onClick={() => {

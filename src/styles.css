@@ -425,6 +425,26 @@ h2 {
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34);
 }
 
+.mode-toggle-button {
+  color: #fff;
+  background: #d66a2d;
+}
+
+.mode-toggle-button.button-secondary {
+  color: #fff;
+  background: rgba(214, 106, 45, 0.88);
+}
+
+.paint-tool-button {
+  color: #fff;
+  background: #1f8f66;
+}
+
+.paint-tool-button.button-secondary {
+  color: #fff;
+  background: rgba(31, 143, 102, 0.88);
+}
+
 .settings-panel {
   position: fixed;
   right: max(68px, calc(env(safe-area-inset-right) + 68px));
