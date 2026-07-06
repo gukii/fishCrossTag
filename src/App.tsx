@@ -1,4 +1,4 @@
-import { ChangeEvent, PointerEvent, RefObject, WheelEvent, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, ChangeEvent, PointerEvent, RefObject, WheelEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Camera,
   Check,
@@ -14,7 +14,6 @@ import {
   Settings,
   Signature,
   Trash2,
-  Undo2,
   ZoomIn,
   X,
 } from "lucide-react";
@@ -94,6 +93,7 @@ type CropSettings = {
   crosshairOffsetPx: number;
   showCrosshairIntro: boolean;
   showExportNumbers: boolean;
+  applyVignette: boolean;
 };
 
 const MIN_STROKE_POINTS = 3;
@@ -109,6 +109,7 @@ const DEFAULT_CROP_SETTINGS: CropSettings = {
   crosshairOffsetPx: 50,
   showCrosshairIntro: true,
   showExportNumbers: true,
+  applyVignette: false,
 };
 const DEFAULT_IMAGE_SRC = `${import.meta.env.BASE_URL}images/default-koi.jpg`;
 const DEFAULT_IMAGE_NAME = "20_0.jpg";
@@ -137,6 +138,62 @@ function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
+function cropRectPx(crop: Box, innerBox: Box, image: ImageInfo) {
+  return {
+    x: (innerBox.x - crop.x) * image.width,
+    y: (innerBox.y - crop.y) * image.height,
+    width: innerBox.width * image.width,
+    height: innerBox.height * image.height,
+  };
+}
+
+function paintMarginVignette(canvas: HTMLCanvasElement, innerRect: PixelRect) {
+  const context = canvas.getContext("2d");
+  if (!context) return;
+
+  const safeInner = {
+    x: clamp(innerRect.x, 0, canvas.width),
+    y: clamp(innerRect.y, 0, canvas.height),
+    width: clamp(innerRect.width, 0, canvas.width),
+    height: clamp(innerRect.height, 0, canvas.height),
+  };
+  const leftMargin = Math.max(1, safeInner.x);
+  const topMargin = Math.max(1, safeInner.y);
+  const rightMargin = Math.max(1, canvas.width - safeInner.x - safeInner.width);
+  const bottomMargin = Math.max(1, canvas.height - safeInner.y - safeInner.height);
+  const overlay = document.createElement("canvas");
+  overlay.width = canvas.width;
+  overlay.height = canvas.height;
+  const overlayContext = overlay.getContext("2d");
+  if (!overlayContext) return;
+  const imageData = overlayContext.createImageData(canvas.width, canvas.height);
+  const data = imageData.data;
+
+  for (let y = 0; y < canvas.height; y += 1) {
+    for (let x = 0; x < canvas.width; x += 1) {
+      const leftDistance = x < safeInner.x ? (safeInner.x - x) / leftMargin : 0;
+      const rightDistance = x > safeInner.x + safeInner.width ? (x - safeInner.x - safeInner.width) / rightMargin : 0;
+      const topDistance = y < safeInner.y ? (safeInner.y - y) / topMargin : 0;
+      const bottomDistance = y > safeInner.y + safeInner.height ? (y - safeInner.y - safeInner.height) / bottomMargin : 0;
+      const distance = Math.hypot(Math.max(leftDistance, rightDistance), Math.max(topDistance, bottomDistance));
+      const amount = clamp(distance, 0, 1);
+      const smooth = amount * amount * (3 - 2 * amount);
+      const index = (y * canvas.width + x) * 4;
+      data[index] = 0;
+      data[index + 1] = 0;
+      data[index + 2] = 0;
+      data[index + 3] = Math.round(150 * smooth);
+    }
+  }
+
+  overlayContext.putImageData(imageData, 0, 0);
+  context.save();
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.globalCompositeOperation = "source-over";
+  context.drawImage(overlay, 0, 0);
+  context.restore();
+}
+
 function loadCropSettings(): CropSettings {
   try {
     const stored = localStorage.getItem(CROP_SETTINGS_KEY);
@@ -153,6 +210,7 @@ function loadCropSettings(): CropSettings {
       crosshairOffsetPx: storedCrosshairOffset === 84 ? DEFAULT_CROP_SETTINGS.crosshairOffsetPx : clamp(storedCrosshairOffset, 20, 180),
       showCrosshairIntro: parsed.showCrosshairIntro ?? DEFAULT_CROP_SETTINGS.showCrosshairIntro,
       showExportNumbers: parsed.showExportNumbers ?? DEFAULT_CROP_SETTINGS.showExportNumbers,
+      applyVignette: parsed.applyVignette ?? DEFAULT_CROP_SETTINGS.applyVignette,
     };
   } catch {
     return DEFAULT_CROP_SETTINGS;
@@ -412,6 +470,10 @@ function polygonCenter(points: Point[]): Point {
   };
 }
 
+function strokeCenter(points: Point[]): Point {
+  return polygonCenter(points);
+}
+
 function polygonPoints(points: Point[]) {
   return points.map((point) => `${point.x * 1000},${point.y * 1000}`).join(" ");
 }
@@ -519,6 +581,7 @@ export default function App() {
   const [cropSettings, setCropSettings] = useState<CropSettings>(() => loadCropSettings());
   const [crosshairOffsetInput, setCrosshairOffsetInput] = useState(() => String(loadCropSettings().crosshairOffsetPx));
   const [showCrosshairIntro, setShowCrosshairIntro] = useState(false);
+  const [finDeleteTagId, setFinDeleteTagId] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<EditTarget>("auto");
   const [hotReloadTime, setHotReloadTime] = useState(() => localStorage.getItem(HMR_TIME_KEY) ?? formatTime());
   const [hotReloadCopied, setHotReloadCopied] = useState(false);
@@ -656,6 +719,7 @@ export default function App() {
       setDrag(null);
       setDrawerOpen(true);
       setEditTarget("auto");
+      setFinDeleteTagId(null);
       setView({ scale: 1, x: 0, y: 0 });
     };
     probe.src = src;
@@ -808,6 +872,22 @@ export default function App() {
     setView({ scale: 1, x: 0, y: 0 });
   }
 
+  function finUndoStyle(tag: KoiTag): CSSProperties {
+    const finLine = tag.finLine ?? tag.bodyLine;
+    const leftPoint = finLine.reduce((left, point) => (point.x < left.x ? point : left), finLine[0]);
+    const rightPoint = finLine.reduce((right, point) => (point.x > right.x ? point : right), finLine[0]);
+    const frame = imageFrame;
+    const leftScreenX = frame ? frame.x + view.x + leftPoint.x * frame.width * view.scale : leftPoint.x * stageSize.width;
+    const rightScreenX = frame ? frame.x + view.x + rightPoint.x * frame.width * view.scale : rightPoint.x * stageSize.width;
+    const side = stageSize.width - rightScreenX >= leftScreenX ? "right" : "left";
+    const anchor = side === "right" ? rightPoint : leftPoint;
+
+    return {
+      ...pointHandleStyle(anchor, view.scale),
+      "--undo-transform": side === "right" ? "translate(1em, -50%)" : "translate(calc(-100% - 1em), -50%)",
+    } as CSSProperties;
+  }
+
   function drawCorrectedCropToCanvas(canvas: HTMLCanvasElement, photo: HTMLImageElement, tag: KoiTag, crop: Box, rotation: number) {
     const cropWidthPx = Math.max(1, Math.round(crop.width * image!.width));
     const cropHeightPx = Math.max(1, Math.round(crop.height * image!.height));
@@ -860,6 +940,11 @@ export default function App() {
     context.restore();
   }
 
+  function drawCanvasVignette(canvas: HTMLCanvasElement, crop: Box, innerBox: Box) {
+    if (!image) return;
+    paintMarginVignette(canvas, cropRectPx(crop, innerBox, image));
+  }
+
   async function exportCorrectedCrops() {
     if (!image || !tags.length) return;
     const sourceImage = sourceImageRef.current;
@@ -872,6 +957,9 @@ export default function App() {
       const crop = displayCrop(tag, image, geometry.correctedBox, cropSettings);
       const canvas = document.createElement("canvas");
       drawCorrectedCropToCanvas(canvas, sourceImage, tag, crop, geometry.rotation);
+      if (cropSettings.applyVignette) {
+        drawCanvasVignette(canvas, crop, geometry.correctedBox);
+      }
       if (cropSettings.showExportNumbers) {
         drawExportNumberBadge(canvas, index + 1);
       }
@@ -956,6 +1044,7 @@ export default function App() {
 
   function startStrokeAtPoint(event: PointerEvent<HTMLDivElement>, point: Point, source: "direct" | "crosshair") {
     event.currentTarget.setPointerCapture(event.pointerId);
+    setFinDeleteTagId(null);
     setDrag({ type: "stroke", pointerId: event.pointerId, points: [point], source });
   }
 
@@ -969,7 +1058,11 @@ export default function App() {
 
   function handleStagePointerDown(event: PointerEvent<HTMLDivElement>) {
     if (!image) return;
-    if (mode !== "move" && (event.target as HTMLElement).closest("[data-no-draw]")) return;
+    const target = event.target as HTMLElement;
+    if (finDeleteTagId && !target.closest(".head-undo-button")) {
+      setFinDeleteTagId(null);
+    }
+    if (mode !== "move" && target.closest("[data-no-draw]")) return;
 
     activePointers.current.set(event.pointerId, screenPointFromEvent(event));
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -1189,9 +1282,10 @@ export default function App() {
 
     if (activeTag && editTarget === "fin") {
       const paintedAt = new Date().toISOString();
+      const tagId = activeTag.id;
       setTags((current) =>
         current.map((tag) =>
-          tag.id === activeTag.id
+          tag.id === tagId
             ? {
                 ...tag,
                 finLine: stroke,
@@ -1207,6 +1301,7 @@ export default function App() {
       );
       setEditTarget("auto");
       setEditingTagId(null);
+      setFinDeleteTagId(tagId);
       return;
     }
 
@@ -1260,6 +1355,7 @@ export default function App() {
         ),
       );
       setEditingTagId(null);
+      setFinDeleteTagId(activeTag.id);
       return;
     }
 
@@ -1342,6 +1438,7 @@ export default function App() {
     setShowOriginalTagId(null);
     setDrawerOpen(true);
     setEditTarget("auto");
+    setFinDeleteTagId(null);
   }
 
   function deleteActiveTag() {
@@ -1367,10 +1464,14 @@ export default function App() {
           : tag,
       ),
     );
+    setFinDeleteTagId(null);
   }
 
   function deleteTagById(tagId: string) {
     setTags((current) => current.filter((tag) => tag.id !== tagId));
+    if (finDeleteTagId === tagId) {
+      setFinDeleteTagId(null);
+    }
     if (activeTagId === tagId) {
       setActiveTagId(null);
       setEditingTagId(null);
@@ -1397,6 +1498,7 @@ export default function App() {
     setEditingTagId(tagId);
     setShowOriginalTagId(null);
     setEditTarget("auto");
+    setFinDeleteTagId(null);
     setTags((current) =>
       current.map((tag) => {
         if (tag.id !== tagId) return tag;
@@ -1415,6 +1517,7 @@ export default function App() {
       setEditingTagId(null);
       setShowOriginalTagId(null);
       setEditTarget("auto");
+      setFinDeleteTagId(null);
       return;
     }
 
@@ -1423,6 +1526,7 @@ export default function App() {
     setEditingTagId(tagId);
     setShowOriginalTagId(tagId);
     setEditTarget("auto");
+    setFinDeleteTagId(null);
     setTags((current) =>
       current.map((currentTag) => {
         if (currentTag.id !== tagId) return currentTag;
@@ -1559,24 +1663,24 @@ export default function App() {
                   />
                 ))}
 
-                {activeTag?.finLine && (
-                  <Button
+                {activeTag?.finLine && finDeleteTagId === activeTag.id && (
+                  <button
                     className="head-undo-button"
-                    size="icon"
-                    variant="secondary"
-                    style={{
-                      ...pointHandleStyle(activeTag.bodyLine[0], view.scale),
-                    }}
+                    type="button"
+                    style={finUndoStyle(activeTag)}
                     data-no-draw
                     onPointerDown={(event) => event.stopPropagation()}
                     onClick={(event) => {
                       event.stopPropagation();
                       undoActiveFinLine();
                     }}
-                    aria-label="Undo fin line"
+                    aria-label="Remove fin line"
                   >
-                    <Undo2 size={17} />
-                  </Button>
+                    <svg viewBox="0 0 40 40" aria-hidden="true">
+                      <circle cx="20" cy="20" r="16" />
+                      <path d="M14 14 L26 26 M26 14 L14 26" />
+                    </svg>
+                  </button>
                 )}
 
                 {editingTag && (
@@ -1683,7 +1787,15 @@ export default function App() {
                   className="floating-mode-button"
                   size="icon"
                   variant={settingsOpen ? "default" : "secondary"}
-                  onClick={() => setSettingsOpen((open) => !open)}
+                  onClick={() => {
+                    setSettingsOpen((open) => {
+                      const nextOpen = !open;
+                      if (nextOpen && window.matchMedia("(max-width: 760px)").matches) {
+                        setDrawerOpen(false);
+                      }
+                      return nextOpen;
+                    });
+                  }}
                   aria-label={settingsOpen ? "Hide settings" : "Show settings"}
                 >
                   <Settings size={18} />
@@ -1784,6 +1896,19 @@ export default function App() {
                           }
                         />
                       </label>
+                      <label className="settings-toggle">
+                        <span>Vignette margins</span>
+                        <input
+                          type="checkbox"
+                          checked={cropSettings.applyVignette}
+                          onChange={(event) =>
+                            setCropSettings((current) => ({
+                              ...current,
+                              applyVignette: event.target.checked,
+                            }))
+                          }
+                        />
+                      </label>
                     </div>
                     <div className="settings-actions">
                       <Button size="sm" variant="secondary" onClick={() => setCropSettings(DEFAULT_CROP_SETTINGS)}>
@@ -1845,14 +1970,18 @@ function RotatedCropCanvas({
   sourceImageRef,
   tag,
   crop,
+  innerBox,
   rotation,
+  applyVignette,
   className,
 }: {
   image: ImageInfo;
   sourceImageRef: RefObject<HTMLImageElement | null>;
   tag: KoiTag;
   crop: Box;
+  innerBox: Box;
   rotation: number;
+  applyVignette: boolean;
   className: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1883,6 +2012,9 @@ function RotatedCropCanvas({
       context.rotate((rotation * Math.PI) / 180);
       context.translate(-centerX, -centerY);
       context.drawImage(photo, 0, 0, image.width, image.height);
+      if (applyVignette) {
+        paintMarginVignette(canvas, cropRectPx(crop, innerBox, image));
+      }
     }
 
     const sourceImage = sourceImageRef.current;
@@ -1894,7 +2026,7 @@ function RotatedCropCanvas({
     const fallback = new Image();
     fallback.onload = () => draw(fallback);
     fallback.src = image.src;
-  }, [crop, image, rotation, sourceImageRef, tag]);
+  }, [applyVignette, crop, image, innerBox, rotation, sourceImageRef, tag]);
 
   return <canvas ref={canvasRef} className={className} />;
 }
@@ -1973,8 +2105,21 @@ function CorrectedThumb({
   return (
     <button className={`thumb-card ${active ? "active" : ""}`} style={{ aspectRatio: `${thumbCrop.width * image.width} / ${thumbCrop.height * image.height}` }} onClick={onSelect}>
       <div className="thumb-stage">
-        <RotatedCropCanvas className="thumb-canvas" image={image} sourceImageRef={sourceImageRef} tag={tag} crop={thumbCrop} rotation={geometry.rotation} />
-        <span className="thumb-selection-window" style={selectionOverlayStyle} aria-hidden="true" />
+        <RotatedCropCanvas
+          className="thumb-canvas"
+          image={image}
+          sourceImageRef={sourceImageRef}
+          tag={tag}
+          crop={thumbCrop}
+          innerBox={geometry.correctedBox}
+          rotation={geometry.rotation}
+          applyVignette={cropSettings.applyVignette}
+        />
+        <span
+          className={`thumb-selection-window ${cropSettings.applyVignette ? "vignette" : ""}`}
+          style={selectionOverlayStyle}
+          aria-hidden="true"
+        />
       </div>
       <Button
         size="icon"

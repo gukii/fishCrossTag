@@ -323,14 +323,38 @@ h2 {
 .head-undo-button {
   position: absolute;
   z-index: 7;
-  min-height: 38px;
-  width: 38px;
-  border: 2px solid rgba(255, 255, 255, 0.95);
+  display: grid;
+  place-items: center;
+  min-height: 44px;
+  width: 44px;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  color: #55e5ff;
+  border: 0;
   border-radius: 999px;
-  transform: translate(18px, -54px) scale(var(--control-scale, 1));
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.34);
+  background: transparent;
+  box-shadow: none;
+  transform: var(--undo-transform, translate(1em, -50%)) scale(var(--control-scale, 1));
   pointer-events: auto;
   touch-action: manipulation;
+}
+
+.head-undo-button svg {
+  width: 38px;
+  height: 38px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.65));
+}
+
+.head-undo-button:hover {
+  color: #75f2ff;
+  background: transparent;
 }
 
 .bbox.done {
@@ -801,6 +825,10 @@ h2 {
   border: 1px solid rgba(255, 255, 255, 0.66);
   box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.34);
   pointer-events: none;
+}
+
+.thumb-selection-window.vignette {
+  box-shadow: none;
 }
 
 .preview-body-line,
