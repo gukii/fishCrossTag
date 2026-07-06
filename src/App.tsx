@@ -102,6 +102,7 @@ const MIN_VIEW_SCALE = 0.05;
 const MAX_VIEW_SCALE = 8;
 const VIEW_ZOOM_STEP = 1.2;
 const AUTO_FINISH_AFTER_MS = 2000;
+const CORRECTED_BOX_STROKE_MARGIN_PX = 14;
 const DEFAULT_CROP_SETTINGS: CropSettings = {
   marginXByLength: 0.1,
   marginYByLength: 0.1,
@@ -436,7 +437,8 @@ function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = correction
 
   const rotatedPoints = rotatedAnnotationPoints(tag, image, rotation);
   const fallbackMarginPx = tag.finLine ? 1 : bodyLengthPx(tag, image) * 0.04;
-  return boxFromPointsWithMargin(rotatedPoints, fallbackMarginPx / image.width, fallbackMarginPx / image.height);
+  const strokeSafeMarginPx = Math.max(fallbackMarginPx, CORRECTED_BOX_STROKE_MARGIN_PX);
+  return boxFromPointsWithMargin(rotatedPoints, strokeSafeMarginPx / image.width, strokeSafeMarginPx / image.height);
 }
 
 function displayCrop(tag: KoiTag, image: ImageInfo, correctedBox: Box, settings: CropSettings) {
