@@ -708,9 +708,10 @@ h2 {
 .thumb-drawer {
   position: fixed;
   left: 0;
-  right: 0;
+  right: auto;
   bottom: 0;
   z-index: 20;
+  width: min(calc(100vw - 72px - env(safe-area-inset-right)), 520px);
   display: grid;
   gap: 8px;
   padding: 8px 14px max(14px, env(safe-area-inset-bottom));
@@ -748,6 +749,8 @@ h2 {
   align-items: stretch;
   gap: 10px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
   padding-bottom: 3px;
 }
 
