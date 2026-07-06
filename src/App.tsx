@@ -835,13 +835,14 @@ export default function App() {
 
     const radius = clamp(Math.round(canvas.height * 0.075), 28, 72);
     const x = radius + Math.round(radius * 0.35);
-    const y = radius + Math.round(radius * 0.35);
+    const y = canvas.height - radius - Math.round(radius * 0.35);
 
     context.save();
+    context.shadowColor = "rgba(0, 0, 0, 0.72)";
+    context.shadowBlur = Math.max(6, Math.round(radius * 0.18));
+    context.shadowOffsetY = Math.max(2, Math.round(radius * 0.05));
     context.beginPath();
     context.arc(x, y, radius, 0, Math.PI * 2);
-    context.fillStyle = "rgba(240, 76, 59, 0.96)";
-    context.fill();
     context.lineWidth = Math.max(4, Math.round(radius * 0.14));
     context.strokeStyle = "#ffffff";
     context.stroke();
