@@ -467,10 +467,137 @@ h2 {
   font-weight: 800;
 }
 
+.settings-toggle input {
+  justify-self: start;
+  width: 28px;
+  min-height: 28px;
+  accent-color: #223c35;
+}
+
 .settings-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.crosshair-intro {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  pointer-events: none;
+}
+
+.intro-crosshair,
+.intro-finger,
+.intro-line {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+}
+
+.intro-crosshair {
+  width: 54px;
+  height: 54px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background:
+    linear-gradient(#ffd348, #ffd348) center / 32px 3px no-repeat,
+    linear-gradient(90deg, #ffd348, #ffd348) center / 3px 32px no-repeat,
+    rgba(20, 28, 24, 0.34);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.42);
+  transform: translate(-50%, -120px);
+  animation: intro-aim 3.4s ease-in-out both;
+}
+
+.intro-finger {
+  width: 44px;
+  height: 44px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: rgba(255, 107, 77, 0.8);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.32);
+}
+
+.intro-finger.primary {
+  transform: translate(-50%, 0);
+  animation: intro-finger-primary 3.4s ease-in-out both;
+}
+
+.intro-finger.secondary {
+  background: rgba(85, 229, 255, 0.82);
+  transform: translate(26px, 38px) scale(0);
+  animation: intro-finger-secondary 3.4s ease-in-out both;
+}
+
+.intro-line {
+  width: 112px;
+  height: 7px;
+  border-radius: 999px;
+  background: #55e5ff;
+  transform-origin: left center;
+  transform: translate(-50%, -120px) rotate(-20deg) scaleX(0);
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.42));
+  animation: intro-line 3.4s ease-in-out both;
+}
+
+@keyframes intro-aim {
+  0%,
+  16% {
+    transform: translate(-50%, -120px);
+  }
+  56%,
+  82% {
+    transform: translate(calc(-50% + 96px), -154px);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + 96px), -154px);
+  }
+}
+
+@keyframes intro-finger-primary {
+  0%,
+  16% {
+    transform: translate(-50%, 0);
+  }
+  56%,
+  82% {
+    transform: translate(calc(-50% + 96px), -34px);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(calc(-50% + 96px), -34px);
+  }
+}
+
+@keyframes intro-finger-secondary {
+  0%,
+  26% {
+    transform: translate(26px, 38px) scale(0);
+  }
+  34%,
+  82% {
+    transform: translate(26px, 38px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(26px, 38px) scale(1);
+  }
+}
+
+@keyframes intro-line {
+  0%,
+  36% {
+    transform: translate(-50%, -120px) rotate(-20deg) scaleX(0);
+  }
+  72%,
+  82% {
+    transform: translate(-50%, -120px) rotate(-20deg) scaleX(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -120px) rotate(-20deg) scaleX(1);
+  }
 }
 
 .empty-stage {

@@ -91,6 +91,8 @@ type CorrectedGeometry = {
 type CropSettings = {
   marginXByLength: number;
   marginYByLength: number;
+  crosshairOffsetPx: number;
+  showCrosshairIntro: boolean;
 };
 
 const MIN_STROKE_POINTS = 3;
@@ -102,6 +104,8 @@ const AUTO_FINISH_AFTER_MS = 2000;
 const DEFAULT_CROP_SETTINGS: CropSettings = {
   marginXByLength: 0.1,
   marginYByLength: 0.1,
+  crosshairOffsetPx: 84,
+  showCrosshairIntro: true,
 };
 const DEFAULT_IMAGE_SRC = `${import.meta.env.BASE_URL}images/default-koi.jpg`;
 const DEFAULT_IMAGE_NAME = "20_0.jpg";
@@ -142,6 +146,8 @@ function loadCropSettings(): CropSettings {
     return {
       marginXByLength: clamp(storedX, 0, 2),
       marginYByLength: clamp(storedY, 0, 2),
+      crosshairOffsetPx: clamp(Number(parsed.crosshairOffsetPx ?? DEFAULT_CROP_SETTINGS.crosshairOffsetPx), 20, 180),
+      showCrosshairIntro: parsed.showCrosshairIntro ?? DEFAULT_CROP_SETTINGS.showCrosshairIntro,
     };
   } catch {
     return DEFAULT_CROP_SETTINGS;
@@ -497,6 +503,7 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [cropSettings, setCropSettings] = useState<CropSettings>(loadCropSettings);
+  const [showCrosshairIntro, setShowCrosshairIntro] = useState(false);
   const [editTarget, setEditTarget] = useState<EditTarget>("auto");
   const [hotReloadTime, setHotReloadTime] = useState(() => localStorage.getItem(HMR_TIME_KEY) ?? formatTime());
   const [hotReloadCopied, setHotReloadCopied] = useState(false);
@@ -524,6 +531,12 @@ export default function App() {
     window.addEventListener("koi-hmr-time", updateHotReloadTime);
     return () => window.removeEventListener("koi-hmr-time", updateHotReloadTime);
   }, []);
+
+  useEffect(() => {
+    if (!showCrosshairIntro) return;
+    const timeout = window.setTimeout(() => setShowCrosshairIntro(false), 3600);
+    return () => window.clearTimeout(timeout);
+  }, [showCrosshairIntro]);
 
   useEffect(() => {
     const probe = new Image();
@@ -622,7 +635,7 @@ export default function App() {
   }
 
   function crosshairPointFromClient(clientX: number, clientY: number, options?: { clampToImage?: boolean }) {
-    return pointFromClient(clientX, clientY - 84, options);
+    return pointFromClient(clientX, clientY - cropSettings.crosshairOffsetPx, options);
   }
 
   function currentCrosshairPoint(options?: { clampToImage?: boolean }) {
@@ -1537,7 +1550,13 @@ export default function App() {
                   size="icon"
                   variant={paintMode === "crosshair" ? "default" : "secondary"}
                   onClick={() => {
-                    setPaintMode((current) => (current === "crosshair" ? "direct" : "crosshair"));
+                    setPaintMode((current) => {
+                      const next = current === "crosshair" ? "direct" : "crosshair";
+                      if (next === "crosshair" && cropSettings.showCrosshairIntro) {
+                        setShowCrosshairIntro(true);
+                      }
+                      return next;
+                    });
                     setAimPoint(null);
                     setDrag(null);
                     aimPointerId.current = null;
@@ -1633,6 +1652,35 @@ export default function App() {
                         }
                       />
                     </label>
+                    <label>
+                      <span>Cross offset</span>
+                      <input
+                        type="number"
+                        min="20"
+                        max="180"
+                        step="1"
+                        value={cropSettings.crosshairOffsetPx}
+                        onChange={(event) =>
+                          setCropSettings((current) => ({
+                            ...current,
+                            crosshairOffsetPx: clamp(Number(event.target.value), 20, 180),
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="settings-toggle">
+                      <span>Show guide</span>
+                      <input
+                        type="checkbox"
+                        checked={cropSettings.showCrosshairIntro}
+                        onChange={(event) =>
+                          setCropSettings((current) => ({
+                            ...current,
+                            showCrosshairIntro: event.target.checked,
+                          }))
+                        }
+                      />
+                    </label>
                   </div>
                   <div className="settings-actions">
                     <Button size="sm" variant="secondary" onClick={() => setCropSettings(DEFAULT_CROP_SETTINGS)}>
@@ -1644,6 +1692,15 @@ export default function App() {
                     </Button>
                   </div>
                 </section>
+              )}
+
+              {showCrosshairIntro && (
+                <div className="crosshair-intro" aria-hidden="true">
+                  <div className="intro-crosshair" />
+                  <div className="intro-finger primary" />
+                  <div className="intro-finger secondary" />
+                  <div className="intro-line" />
+                </div>
               )}
             </div>
           ) : (
