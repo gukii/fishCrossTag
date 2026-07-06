@@ -510,6 +510,7 @@ export default function App() {
   const [view, setView] = useState<ViewTransform>({ scale: 1, x: 0, y: 0 });
   const [tags, setTags] = useState<KoiTag[]>([]);
   const [activeTagId, setActiveTagId] = useState<string | null>(null);
+  const [editingTagId, setEditingTagId] = useState<string | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -522,9 +523,10 @@ export default function App() {
   const [showOriginalTagId, setShowOriginalTagId] = useState<string | null>(null);
 
   const activeTag = tags.find((tag) => tag.id === activeTagId) ?? null;
+  const editingTag = tags.find((tag) => tag.id === editingTagId) ?? null;
   const activeStroke = drag?.type === "stroke" ? drag.points : [];
-  const activeDisplayBox = activeTag?.bbox;
-  const activeOrientedPoints = activeTag && image && activeTag.correctionRotationDeg != null ? orientedCorrectedBoxPoints(activeTag, image) : null;
+  const activeDisplayBox = editingTag?.bbox;
+  const activeOrientedPoints = editingTag && image && editingTag.correctionRotationDeg != null ? orientedCorrectedBoxPoints(editingTag, image) : null;
   const imageFrame = image ? coverImageFrame(image, stageSize) : null;
 
   useEffect(() => {
@@ -648,6 +650,7 @@ export default function App() {
       });
       setTags([]);
       setActiveTagId(null);
+      setEditingTagId(null);
       setDrag(null);
       setDrawerOpen(true);
       setEditTarget("auto");
@@ -1178,6 +1181,7 @@ export default function App() {
         }),
       );
       setEditTarget("auto");
+      setEditingTagId(null);
       return;
     }
 
@@ -1200,6 +1204,7 @@ export default function App() {
         ),
       );
       setEditTarget("auto");
+      setEditingTagId(null);
       return;
     }
 
@@ -1230,6 +1235,7 @@ export default function App() {
           },
         ]);
         setActiveTagId(id);
+        setEditingTagId(null);
         setEditTarget("auto");
         return;
       }
@@ -1251,6 +1257,7 @@ export default function App() {
             : tag,
         ),
       );
+      setEditingTagId(null);
       return;
     }
 
@@ -1268,6 +1275,7 @@ export default function App() {
       },
     ]);
     setActiveTagId(id);
+    setEditingTagId(null);
     setEditTarget("auto");
   }
 
@@ -1280,6 +1288,7 @@ export default function App() {
     const startBox = tag.correctionRotationDeg == null || !image ? tag.bbox : correctedGeometry(tag, image).correctedBox;
     const startPoint = tag.correctionRotationDeg == null || !image ? point : rotateImagePoint(point, correctionCenter(tag), correctionRotation(tag, image), image);
     setActiveTagId(tagId);
+    setEditingTagId(tagId);
     setShowOriginalTagId(null);
     setDrag({ type: "bbox", pointerId: event.pointerId, tagId, handle, startBox, startPoint });
   }
@@ -1293,6 +1302,7 @@ export default function App() {
     const center = correctionCenter(tag);
     const startRotation = tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image);
     setActiveTagId(tagId);
+    setEditingTagId(tagId);
     setShowOriginalTagId(null);
     updateTagCorrection(tagId, {
       correctionRotationDeg: startRotation,
@@ -1309,7 +1319,7 @@ export default function App() {
 
   function beginBboxMove(event: PointerEvent<HTMLElement>, tagId: string) {
     if (mode === "move") return;
-    if (tagId !== activeTagId || !(event.target as HTMLElement).closest(".bbox-move-handle")) return;
+    if (tagId !== editingTagId || !(event.target as HTMLElement).closest(".bbox-move-handle")) return;
     event.stopPropagation();
     const point = pointFromPointer(event, { clampToImage: false });
     const tag = tags.find((current) => current.id === tagId);
@@ -1326,6 +1336,7 @@ export default function App() {
       current.map((tag) => (tag.id === activeTag.id ? { ...tag, status: "done" } : tag)),
     );
     setActiveTagId(null);
+    setEditingTagId(null);
     setShowOriginalTagId(null);
     setDrawerOpen(true);
     setEditTarget("auto");
@@ -1360,8 +1371,12 @@ export default function App() {
     setTags((current) => current.filter((tag) => tag.id !== tagId));
     if (activeTagId === tagId) {
       setActiveTagId(null);
+      setEditingTagId(null);
       setShowOriginalTagId(null);
       setEditTarget("auto");
+    }
+    if (editingTagId === tagId) {
+      setEditingTagId(null);
     }
   }
 
@@ -1377,6 +1392,7 @@ export default function App() {
       bringTagIntoView(tag);
     }
     setActiveTagId(tagId);
+    setEditingTagId(tagId);
     setShowOriginalTagId(null);
     setEditTarget("auto");
     setTags((current) =>
@@ -1394,6 +1410,7 @@ export default function App() {
   function toggleTagFromHead(tagId: string) {
     if (activeTagId === tagId) {
       setActiveTagId(null);
+      setEditingTagId(null);
       setShowOriginalTagId(null);
       setEditTarget("auto");
       return;
@@ -1401,6 +1418,7 @@ export default function App() {
 
     const tag = tags.find((current) => current.id === tagId);
     setActiveTagId(tagId);
+    setEditingTagId(tagId);
     setShowOriginalTagId(tagId);
     setEditTarget("auto");
     setTags((current) =>
@@ -1457,10 +1475,10 @@ export default function App() {
                     <g key={tag.id} className={tag.id === activeTagId ? "selected" : ""}>
                       <path d={pathFromPoints(tag.bodyLine)} className="body-line" />
                       {tag.finLine && <path d={pathFromPoints(tag.finLine)} className="fin-line" />}
-                      {image && tag.id === activeTagId && tag.correctionRotationDeg != null && (
+                      {image && tag.id === editingTagId && tag.correctionRotationDeg != null && (
                         <polygon className="oriented-bbox" points={polygonPoints(orientedCorrectedBoxPoints(tag, image))} />
                       )}
-                      {tag.correctionRotationDeg == null && (
+                      {tag.id !== editingTagId && (
                         <>
                           <circle className="head-dot" cx={tag.bodyLine[0].x * 1000} cy={tag.bodyLine[0].y * 1000} r="22" />
                           <text className="tag-number" x={tag.bodyLine[0].x * 1000} y={tag.bodyLine[0].y * 1000} dy="-34">
@@ -1479,14 +1497,14 @@ export default function App() {
                   )}
                 </svg>
 
-                {activeTag && activeOrientedPoints && (
+                {editingTag && activeOrientedPoints && (
                   <>
                     <span
                       className="bbox-move-handle"
                       style={pointHandleStyle(polygonCenter(activeOrientedPoints), view.scale)}
                       data-no-draw
                       aria-hidden="true"
-                      onPointerDown={(event) => beginBboxMove(event, activeTag.id)}
+                      onPointerDown={(event) => beginBboxMove(event, editingTag.id)}
                     />
                     {(["nw", "se"] as const).map((handle) => {
                       const point = handle === "nw" ? activeOrientedPoints[0] : activeOrientedPoints[2];
@@ -1496,7 +1514,7 @@ export default function App() {
                           className={`bbox-handle resize-handle ${handle}`}
                           style={pointHandleStyle(point, view.scale)}
                           data-no-draw
-                          onPointerDown={(event) => beginBboxResize(event, activeTag.id, handle)}
+                          onPointerDown={(event) => beginBboxResize(event, editingTag.id, handle)}
                         />
                       );
                     })}
@@ -1508,7 +1526,7 @@ export default function App() {
                           className={`bbox-handle rotate-handle ${handle}`}
                           style={pointHandleStyle(point, view.scale)}
                           data-no-draw
-                          onPointerDown={(event) => beginCorrectionRotate(event, activeTag.id)}
+                          onPointerDown={(event) => beginCorrectionRotate(event, editingTag.id)}
                         />
                       );
                     })}
@@ -1559,8 +1577,8 @@ export default function App() {
                   </Button>
                 )}
 
-                {activeTag && (
-                  <div className="fish-actions" style={controlPosition(activeDisplayBox ?? activeTag.bbox, view.scale)} data-no-draw onPointerDown={(event) => event.stopPropagation()}>
+                {editingTag && (
+                  <div className="fish-actions" style={controlPosition(activeDisplayBox ?? editingTag.bbox, view.scale)} data-no-draw onPointerDown={(event) => event.stopPropagation()}>
                     <Button size="sm" onPointerDown={(event) => event.stopPropagation()} onClick={finishTag}>
                       <Check size={16} />
                       OK
@@ -1943,11 +1961,18 @@ function CorrectedThumb({
 }) {
   const geometry = useMemo(() => correctedGeometry(tag, image), [image, tag]);
   const thumbCrop = displayCrop(tag, image, geometry.correctedBox, cropSettings);
+  const selectionOverlayStyle = {
+    left: `${((geometry.correctedBox.x - thumbCrop.x) / thumbCrop.width) * 100}%`,
+    top: `${((geometry.correctedBox.y - thumbCrop.y) / thumbCrop.height) * 100}%`,
+    width: `${(geometry.correctedBox.width / thumbCrop.width) * 100}%`,
+    height: `${(geometry.correctedBox.height / thumbCrop.height) * 100}%`,
+  };
 
   return (
     <button className={`thumb-card ${active ? "active" : ""}`} style={{ aspectRatio: `${thumbCrop.width * image.width} / ${thumbCrop.height * image.height}` }} onClick={onSelect}>
       <div className="thumb-stage">
         <RotatedCropCanvas className="thumb-canvas" image={image} sourceImageRef={sourceImageRef} tag={tag} crop={thumbCrop} rotation={geometry.rotation} />
+        <span className="thumb-selection-window" style={selectionOverlayStyle} aria-hidden="true" />
       </div>
       <Button
         size="icon"
