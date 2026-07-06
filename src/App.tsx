@@ -389,10 +389,15 @@ function bboxHandleStyle(box: Box, handle: Handle) {
   };
 }
 
-function pointHandleStyle(point: Point) {
+function controlScale(viewScale: number) {
+  return clamp(1 / viewScale, 0.75, 2.35);
+}
+
+function pointHandleStyle(point: Point, viewScale = 1) {
   return {
     left: `${point.x * 100}%`,
     top: `${point.y * 100}%`,
+    "--control-scale": controlScale(viewScale),
   };
 }
 
@@ -443,14 +448,16 @@ function orientedCorrectedBoxPoints(tag: KoiTag, image: ImageInfo) {
   return orderedBoxCorners(sourceCorrectedBox(tag, image, rotation)).map((point) => rotateImagePoint(point, center, -rotation, image));
 }
 
-function controlPosition(box: Box) {
+function controlPosition(box: Box, viewScale = 1) {
   const placeBelow = box.y < 0.16;
   const top = placeBelow ? box.y + box.height + 0.018 : box.y - 0.018;
   const x = clamp(box.x + box.width / 2, 0.22, 0.78);
+  const anchor = placeBelow ? "translate(-50%, 0)" : "translate(-50%, -100%)";
   return {
     left: `${x * 100}%`,
     top: `${clamp(top, 0.04, 0.9) * 100}%`,
-    transform: placeBelow ? "translate(-50%, 0)" : "translate(-50%, -100%)",
+    "--control-transform": anchor,
+    "--control-scale": controlScale(viewScale),
   };
 }
 
@@ -1444,7 +1451,7 @@ export default function App() {
                   <>
                     <span
                       className="bbox-move-handle"
-                      style={pointHandleStyle(polygonCenter(activeOrientedPoints))}
+                      style={pointHandleStyle(polygonCenter(activeOrientedPoints), view.scale)}
                       data-no-draw
                       aria-hidden="true"
                       onPointerDown={(event) => beginBboxMove(event, activeTag.id)}
@@ -1455,7 +1462,7 @@ export default function App() {
                         <span
                           key={handle}
                           className={`bbox-handle resize-handle ${handle}`}
-                          style={pointHandleStyle(point)}
+                          style={pointHandleStyle(point, view.scale)}
                           data-no-draw
                           onPointerDown={(event) => beginBboxResize(event, activeTag.id, handle)}
                         />
@@ -1467,7 +1474,7 @@ export default function App() {
                         <span
                           key={handle}
                           className={`bbox-handle rotate-handle ${handle}`}
-                          style={pointHandleStyle(point)}
+                          style={pointHandleStyle(point, view.scale)}
                           data-no-draw
                           onPointerDown={(event) => beginCorrectionRotate(event, activeTag.id)}
                         />
@@ -1485,8 +1492,7 @@ export default function App() {
                     key={`${tag.id}-head-select`}
                     className={`head-select ${tag.id === activeTagId ? "active" : ""}`}
                     style={{
-                      left: `${tag.bodyLine[0].x * 100}%`,
-                      top: `${tag.bodyLine[0].y * 100}%`,
+                      ...pointHandleStyle(tag.bodyLine[0], view.scale),
                     }}
                     data-no-draw
                     onPointerDown={(event) => {
@@ -1507,8 +1513,7 @@ export default function App() {
                     size="icon"
                     variant="secondary"
                     style={{
-                      left: `${activeTag.bodyLine[0].x * 100}%`,
-                      top: `${activeTag.bodyLine[0].y * 100}%`,
+                      ...pointHandleStyle(activeTag.bodyLine[0], view.scale),
                     }}
                     data-no-draw
                     onPointerDown={(event) => event.stopPropagation()}
@@ -1523,7 +1528,7 @@ export default function App() {
                 )}
 
                 {activeTag && (
-                  <div className="fish-actions" style={controlPosition(activeDisplayBox ?? activeTag.bbox)} data-no-draw onPointerDown={(event) => event.stopPropagation()}>
+                  <div className="fish-actions" style={controlPosition(activeDisplayBox ?? activeTag.bbox, view.scale)} data-no-draw onPointerDown={(event) => event.stopPropagation()}>
                     <Button size="sm" onPointerDown={(event) => event.stopPropagation()} onClick={finishTag}>
                       <Check size={16} />
                       OK

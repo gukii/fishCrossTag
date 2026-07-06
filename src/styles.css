@@ -309,7 +309,7 @@ h2 {
   border-radius: 50%;
   background: rgba(240, 76, 59, 0.24);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--control-scale, 1));
   touch-action: manipulation;
 }
 
@@ -327,7 +327,7 @@ h2 {
   width: 38px;
   border: 2px solid rgba(255, 255, 255, 0.95);
   border-radius: 999px;
-  transform: translate(18px, -54px);
+  transform: translate(18px, -54px) scale(var(--control-scale, 1));
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.34);
   pointer-events: auto;
   touch-action: manipulation;
@@ -365,7 +365,7 @@ h2 {
   box-shadow:
     0 0 0 3px rgba(255, 107, 77, 0.55),
     0 4px 12px rgba(0, 0, 0, 0.42);
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--control-scale, 1));
   cursor: move;
   pointer-events: auto;
   touch-action: none;
@@ -392,7 +392,7 @@ h2 {
 .bbox-handle.ne,
 .bbox-handle.sw,
 .bbox-handle.se {
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--control-scale, 1));
 }
 
 .fish-actions {
@@ -404,6 +404,8 @@ h2 {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.9);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  transform: var(--control-transform, translate(-50%, -100%)) scale(var(--control-scale, 1));
+  transform-origin: center;
   touch-action: manipulation;
 }
 
