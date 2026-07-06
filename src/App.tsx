@@ -826,6 +826,30 @@ export default function App() {
     context.drawImage(photo, 0, 0, image!.width, image!.height);
   }
 
+  function drawExportNumberBadge(canvas: HTMLCanvasElement, number: number) {
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    const radius = clamp(Math.round(canvas.height * 0.075), 28, 72);
+    const x = radius + Math.round(radius * 0.35);
+    const y = radius + Math.round(radius * 0.35);
+
+    context.save();
+    context.beginPath();
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.fillStyle = "rgba(240, 76, 59, 0.96)";
+    context.fill();
+    context.lineWidth = Math.max(4, Math.round(radius * 0.14));
+    context.strokeStyle = "#ffffff";
+    context.stroke();
+    context.fillStyle = "#ffffff";
+    context.font = `900 ${Math.round(radius * 1.08)}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(String(number), x, y + Math.round(radius * 0.03));
+    context.restore();
+  }
+
   async function exportCorrectedCrops() {
     if (!image || !tags.length) return;
     const sourceImage = sourceImageRef.current;
@@ -833,11 +857,12 @@ export default function App() {
     const exportWindow = window.open("", "_blank");
     exportWindow?.document.write("<title>Koi export</title><body style=\"margin:0;background:#111614;color:white;font-family:sans-serif\">Preparing export...</body>");
 
-    const cropCanvases = tags.map((tag) => {
+    const cropCanvases = tags.map((tag, index) => {
       const geometry = correctedGeometry(tag, image);
       const crop = displayCrop(tag, image, geometry.correctedBox, cropSettings);
       const canvas = document.createElement("canvas");
       drawCorrectedCropToCanvas(canvas, sourceImage, tag, crop, geometry.rotation);
+      drawExportNumberBadge(canvas, index + 1);
       return canvas;
     });
     const targetHeight = Math.max(...cropCanvases.map((canvas) => canvas.height));
