@@ -881,10 +881,16 @@ export default function App() {
     const rightScreenX = frame ? frame.x + view.x + rightPoint.x * frame.width * view.scale : rightPoint.x * stageSize.width;
     const side = stageSize.width - rightScreenX >= leftScreenX ? "right" : "left";
     const anchor = side === "right" ? rightPoint : leftPoint;
+    const frameWidth = Math.max(1, frame?.width ?? stageSize.width);
+    const fixedGapPx = 18;
+    const imageGap = fixedGapPx / Math.max(1, frameWidth * view.scale);
+    const x = side === "right" ? anchor.x + imageGap : anchor.x - imageGap;
 
     return {
-      ...pointHandleStyle(anchor, view.scale),
-      "--undo-transform": side === "right" ? "translate(1em, -50%)" : "translate(calc(-100% - 1em), -50%)",
+      left: `${x * 100}%`,
+      top: `${anchor.y * 100}%`,
+      "--control-scale": controlScale(view.scale),
+      "--undo-transform": side === "right" ? "translate(0, -50%)" : "translate(-100%, -50%)",
     } as CSSProperties;
   }
 
@@ -914,13 +920,12 @@ export default function App() {
     context.drawImage(photo, 0, 0, image!.width, image!.height);
   }
 
-  function drawExportNumberBadge(canvas: HTMLCanvasElement, number: number) {
-    const context = canvas.getContext("2d");
-    if (!context) return;
-
-    const radius = clamp(Math.round(canvas.height * 0.075), 28, 72);
-    const x = radius + Math.round(radius * 0.35);
-    const y = canvas.height - radius - Math.round(radius * 0.35);
+  function drawExportNumberBadge(
+    context: CanvasRenderingContext2D,
+    number: number,
+    options: { x: number; y: number; radius: number },
+  ) {
+    const { x, y, radius } = options;
 
     context.save();
     context.setTransform(1, 0, 0, 1, 0, 0);
@@ -960,9 +965,6 @@ export default function App() {
       if (cropSettings.applyVignette) {
         drawCanvasVignette(canvas, crop, geometry.correctedBox);
       }
-      if (cropSettings.showExportNumbers) {
-        drawExportNumberBadge(canvas, index + 1);
-      }
       return canvas;
     });
     const targetHeight = Math.max(...cropCanvases.map((canvas) => canvas.height));
@@ -980,6 +982,14 @@ export default function App() {
     let x = 0;
     cropCanvases.forEach((canvas, index) => {
       context.drawImage(canvas, x, 0, scaledWidths[index], targetHeight);
+      if (cropSettings.showExportNumbers) {
+        const radius = clamp(Math.round(targetHeight * 0.075), 28, 72);
+        drawExportNumberBadge(context, index + 1, {
+          x: x + radius + Math.round(radius * 0.35),
+          y: targetHeight - radius - Math.round(radius * 0.35),
+          radius,
+        });
+      }
       x += scaledWidths[index] + gap;
     });
 
@@ -1777,7 +1787,15 @@ export default function App() {
                   size="icon"
                   variant={drawerOpen ? "default" : "secondary"}
                   disabled={!tags.length}
-                  onClick={() => setDrawerOpen((open) => !open)}
+                  onClick={() => {
+                    setDrawerOpen((open) => {
+                      const nextOpen = !open;
+                      if (nextOpen) {
+                        setSettingsOpen(false);
+                      }
+                      return nextOpen;
+                    });
+                  }}
                   aria-label={drawerOpen ? "Hide tagged fish drawer" : "Show tagged fish drawer"}
                 >
                   {drawerOpen ? <PanelBottomClose size={18} /> : <PanelBottomOpen size={18} />}
@@ -1790,7 +1808,7 @@ export default function App() {
                   onClick={() => {
                     setSettingsOpen((open) => {
                       const nextOpen = !open;
-                      if (nextOpen && window.matchMedia("(max-width: 760px)").matches) {
+                      if (nextOpen) {
                         setDrawerOpen(false);
                       }
                       return nextOpen;
