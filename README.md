@@ -30,6 +30,7 @@ Open:
 ```txt
 http://127.0.0.1:5185/
 http://127.0.0.1:5185/dashboard
+http://127.0.0.1:5185/parent-demo
 ```
 
 Run the Bun API:
@@ -43,6 +44,7 @@ API defaults:
 ```txt
 http://localhost:3000/api/health
 http://localhost:3000/api/dashboard
+http://localhost:3000/api/sessions/:id
 ```
 
 SQLite defaults to:
@@ -64,6 +66,8 @@ Frontend routes are currently simple pathname switches:
 - `/`: mobile tagger
 - `/affine`: older geometry prototype
 - `/dashboard`: image manager / workflow dashboard
+- `/parent-demo`: local proof that a parent app can create and embed a tagger session
+- `/s/:sessionId`: standalone tagger session route
 
 The dashboard currently uses seed data. The Bun API has the first schema and endpoint skeleton for:
 
@@ -77,6 +81,46 @@ The dashboard currently uses seed data. The Bun API has the first schema and end
 - dataset versions
 - training runs
 - model versions
+- tagger sessions
+
+## Standalone Tagger Proof
+
+The `tanstack-dashboard` branch now includes a minimal standalone tagger proof.
+
+Run both processes:
+
+```bash
+pnpm dev
+pnpm dev:api
+```
+
+Open:
+
+```txt
+http://127.0.0.1:5185/parent-demo
+```
+
+The parent demo:
+
+1. accepts a photo URL
+2. creates a tagger session through `POST /api/sessions`
+3. embeds `/s/:sessionId` in an iframe
+4. lets the user tag the image with the current tagger UI
+5. saves the completed result through `POST /api/sessions/:id/complete`
+6. receives a browser message from the iframe and displays the completed JSON
+
+This proves the standalone service shape without implementing webhook delivery yet.
+
+Current session endpoints:
+
+```txt
+POST /api/sessions
+GET  /api/sessions/:sessionId
+POST /api/sessions/:sessionId/draft
+POST /api/sessions/:sessionId/complete
+```
+
+Automatic caller logging and webhook delivery are intentionally deferred. The next step is to add caller identity, webhook signing, retryable delivery records, and manager-side webhook handling.
 
 ## Railway Plan
 

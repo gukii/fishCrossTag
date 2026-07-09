@@ -34,6 +34,47 @@ export type FishAnnotationPayload = {
   imageHeight: number;
 };
 
+export type TaggerSessionImage = {
+  id: string;
+  url: string;
+  name?: string;
+  width?: number;
+  height?: number;
+};
+
+export type TaggerAnnotationResult = FishAnnotationPayload & {
+  fishId: string;
+  buckets: AnnotationBucket[];
+  cropSettings?: {
+    marginXByLength: number;
+    marginYByLength: number;
+    applyVignette: boolean;
+  };
+};
+
+export type TaggerCompletePayload = {
+  sessionId?: string;
+  imageId: string;
+  annotations: TaggerAnnotationResult[];
+  metadata?: Record<string, unknown>;
+  completedAt: string;
+};
+
+export type TaggerSession = {
+  id: string;
+  image: TaggerSessionImage;
+  status: "open" | "draft" | "completed" | "cancelled";
+  returnUrl?: string;
+  webhookUrl?: string;
+  metadata?: Record<string, unknown>;
+  options?: Record<string, unknown>;
+  draft?: unknown;
+  result?: TaggerCompletePayload;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+};
+
 export type WorkflowStats = {
   imageBatches: number;
   queuedTasks: number;

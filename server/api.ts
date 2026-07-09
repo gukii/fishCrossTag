@@ -1,5 +1,5 @@
 import { db, jsonResponse, nowIso } from "./db";
-import { deriveAnnotationBuckets, FishAnnotationPayload } from "../src/workflow";
+import { deriveAnnotationBuckets, FishAnnotationPayload, TaggerCompletePayload, TaggerSession } from "../src/workflow";
 
 type RouteHandler = (request: Request, params: Record<string, string>) => Response | Promise<Response>;
 
@@ -23,7 +23,142 @@ function row<T>(sql: string, params: unknown[] = []) {
   return db.query(sql).get(...params) as T | null;
 }
 
+type SessionRow = {
+  id: string;
+  external_image_id: string;
+  image_url: string;
+  image_name: string | null;
+  image_width: number | null;
+  image_height: number | null;
+  webhook_url: string | null;
+  return_url: string | null;
+  metadata_json: string | null;
+  options_json: string | null;
+  draft_json: string | null;
+  result_json: string | null;
+  status: TaggerSession["status"];
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+};
+
+function parseJsonObject(value: string | null) {
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function sessionFromRow(session: SessionRow): TaggerSession {
+  return {
+    id: session.id,
+    image: {
+      id: session.external_image_id,
+      url: session.image_url,
+      name: session.image_name ?? undefined,
+      width: session.image_width ?? undefined,
+      height: session.image_height ?? undefined,
+    },
+    status: session.status,
+    webhookUrl: session.webhook_url ?? undefined,
+    returnUrl: session.return_url ?? undefined,
+    metadata: parseJsonObject(session.metadata_json),
+    options: parseJsonObject(session.options_json),
+    draft: parseJsonObject(session.draft_json),
+    result: session.result_json ? (JSON.parse(session.result_json) as TaggerCompletePayload) : undefined,
+    createdAt: session.created_at,
+    updatedAt: session.updated_at,
+    completedAt: session.completed_at ?? undefined,
+  };
+}
+
 route("GET", "/api/health", () => jsonResponse({ ok: true, at: nowIso() }));
+
+route("POST", "/api/sessions", async (request) => {
+  const body = (await request.json()) as {
+    image?: {
+      id?: string;
+      url?: string;
+      name?: string;
+      width?: number;
+      height?: number;
+    };
+    webhookUrl?: string;
+    returnUrl?: string;
+    metadata?: Record<string, unknown>;
+    options?: Record<string, unknown>;
+  };
+  if (!body.image?.url) {
+    return jsonResponse({ error: "image.url is required" }, { status: 400 });
+  }
+
+  const sessionId = id("session");
+  const createdAt = nowIso();
+  db.query(
+    `insert into tagger_sessions (
+      id,
+      external_image_id,
+      image_url,
+      image_name,
+      image_width,
+      image_height,
+      webhook_url,
+      return_url,
+      metadata_json,
+      options_json,
+      created_at,
+      updated_at
+    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    sessionId,
+    body.image.id ?? sessionId,
+    body.image.url,
+    body.image.name ?? null,
+    body.image.width ?? null,
+    body.image.height ?? null,
+    body.webhookUrl ?? null,
+    body.returnUrl ?? null,
+    JSON.stringify(body.metadata ?? {}),
+    JSON.stringify(body.options ?? {}),
+    createdAt,
+    createdAt,
+  );
+
+  const session = sessionFromRow(row<SessionRow>("select * from tagger_sessions where id = ?", [sessionId])!);
+  return jsonResponse(
+    {
+      session,
+      taggerUrl: `/s/${sessionId}`,
+    },
+    { status: 201 },
+  );
+});
+
+route("GET", "/api/sessions/:sessionId", (_request, params) => {
+  const session = row<SessionRow>("select * from tagger_sessions where id = ?", [params.sessionId]);
+  if (!session) return jsonResponse({ error: "Session not found" }, { status: 404 });
+  return jsonResponse(sessionFromRow(session));
+});
+
+route("POST", "/api/sessions/:sessionId/draft", async (request, params) => {
+  const draft = await request.json();
+  const updatedAt = nowIso();
+  const result = db.query("update tagger_sessions set draft_json = ?, status = 'draft', updated_at = ? where id = ?").run(JSON.stringify(draft), updatedAt, params.sessionId);
+  if (result.changes === 0) return jsonResponse({ error: "Session not found" }, { status: 404 });
+  return jsonResponse({ ok: true, sessionId: params.sessionId, updatedAt });
+});
+
+route("POST", "/api/sessions/:sessionId/complete", async (request, params) => {
+  const payload = (await request.json()) as TaggerCompletePayload;
+  const completedAt = nowIso();
+  const result = db
+    .query("update tagger_sessions set result_json = ?, status = 'completed', completed_at = ?, updated_at = ? where id = ?")
+    .run(JSON.stringify({ ...payload, sessionId: params.sessionId, completedAt }), completedAt, completedAt, params.sessionId);
+  if (result.changes === 0) return jsonResponse({ error: "Session not found" }, { status: 404 });
+  return jsonResponse({ ok: true, sessionId: params.sessionId, completedAt });
+});
 
 route("GET", "/api/dashboard", () => {
   const stats = row<{

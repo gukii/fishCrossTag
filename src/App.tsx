@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
+import { deriveAnnotationBuckets, deriveFinMode, TaggerAnnotationResult, TaggerCompletePayload } from "./workflow";
 
 type Mode = "tag" | "move";
 type PaintMode = "direct" | "crosshair";
@@ -64,10 +65,19 @@ type KoiTag = {
 };
 
 type ImageInfo = {
+  id?: string;
   name: string;
   src: string;
   width: number;
   height: number;
+};
+
+type AppProps = {
+  initialImage?: ImageInfo;
+  sessionId?: string;
+  sessionMode?: boolean;
+  metadata?: Record<string, unknown>;
+  onSessionComplete?: (payload: TaggerCompletePayload) => void | Promise<void>;
 };
 
 type DragState =
@@ -558,7 +568,7 @@ function coverImageFrame(image: ImageInfo, stage: PixelRect): PixelRect {
   };
 }
 
-export default function App() {
+export default function App({ initialImage, sessionId, sessionMode = false, metadata, onSessionComplete }: AppProps = {}) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageTransformRef = useRef<HTMLDivElement | null>(null);
   const sourceImageRef = useRef<HTMLImageElement | null>(null);
@@ -632,9 +642,14 @@ export default function App() {
   }, [showCrosshairIntro]);
 
   useEffect(() => {
+    if (initialImage) {
+      setImage(initialImage);
+      return;
+    }
     const probe = new Image();
     probe.onload = () => {
       setImage({
+        id: DEFAULT_IMAGE_NAME,
         name: DEFAULT_IMAGE_NAME,
         src: DEFAULT_IMAGE_SRC,
         width: probe.naturalWidth,
@@ -642,7 +657,7 @@ export default function App() {
       });
     };
     probe.src = DEFAULT_IMAGE_SRC;
-  }, []);
+  }, [initialImage]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -948,6 +963,44 @@ export default function App() {
   function drawCanvasVignette(canvas: HTMLCanvasElement, crop: Box, innerBox: Box) {
     if (!image) return;
     paintMarginVignette(canvas, cropRectPx(crop, innerBox, image));
+  }
+
+  function serializeTag(tag: KoiTag): TaggerAnnotationResult | null {
+    if (!image) return null;
+    const geometry = correctedGeometry(tag, image);
+    const annotation = {
+      fishId: tag.id,
+      bodyLine: tag.bodyLine,
+      finLine: tag.finLine,
+      finMode: deriveFinMode({ bodyLine: tag.bodyLine, finLine: tag.finLine }),
+      correctedBox: geometry.correctedBox,
+      correctedPolygon: orientedCorrectedBoxPoints(tag, image),
+      imageWidth: image.width,
+      imageHeight: image.height,
+      cropSettings: {
+        marginXByLength: cropSettings.marginXByLength,
+        marginYByLength: cropSettings.marginYByLength,
+        applyVignette: cropSettings.applyVignette,
+      },
+    };
+
+    return {
+      ...annotation,
+      buckets: deriveAnnotationBuckets(annotation),
+    };
+  }
+
+  async function completeSession() {
+    if (!image || !tags.length || !onSessionComplete) return;
+    const annotations = tags.map(serializeTag).filter((annotation): annotation is TaggerAnnotationResult => Boolean(annotation));
+    const payload: TaggerCompletePayload = {
+      sessionId,
+      imageId: image.id ?? image.name,
+      annotations,
+      metadata,
+      completedAt: new Date().toISOString(),
+    };
+    await onSessionComplete(payload);
   }
 
   async function exportCorrectedCrops() {
@@ -1818,6 +1871,18 @@ export default function App() {
                 >
                   <Settings size={18} />
                 </Button>
+
+                {sessionMode && (
+                  <Button
+                    className="floating-mode-button session-complete-button"
+                    size="icon"
+                    disabled={!tags.length}
+                    onClick={completeSession}
+                    aria-label="Complete tagging session"
+                  >
+                    <Check size={19} />
+                  </Button>
+                )}
               </div>
 
               {settingsOpen && (

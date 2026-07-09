@@ -28,6 +28,25 @@ create table if not exists queues (
   created_at text not null
 );
 
+create table if not exists tagger_sessions (
+  id text primary key,
+  external_image_id text not null,
+  image_url text not null,
+  image_name text,
+  image_width integer,
+  image_height integer,
+  webhook_url text,
+  return_url text,
+  metadata_json text,
+  options_json text,
+  draft_json text,
+  result_json text,
+  status text not null default 'open',
+  created_at text not null,
+  updated_at text not null,
+  completed_at text
+);
+
 create table if not exists annotation_tasks (
   id text primary key,
   image_id text not null references images(id) on delete cascade,
