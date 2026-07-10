@@ -334,6 +334,64 @@ Benefits:
 
 Use this when the parent app wants to call the tagger, pass in a photo, and get annotation data back.
 
+### Minimal Parent App Integration
+
+The API does not open the tagger UI by itself. The parent app creates the session, then opens the returned tagger route in a tab or iframe.
+
+Create a session:
+
+```ts
+const response = await fetch("https://fishcrosstag.up.railway.app/api/sessions", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    image: {
+      id: "photo_123",
+      url: "https://your-app.example/photos/pond-photo.jpg",
+      name: "pond-photo.jpg"
+    },
+    metadata: {
+      source: "your-parent-app",
+      userId: "user_1"
+    },
+    webhookUrl: "https://your-parent-app.example/api/fishcross/webhook"
+  })
+});
+
+const { session, taggerUrl } = await response.json();
+```
+
+Open as a new tab:
+
+```ts
+const fullTaggerUrl =
+  `https://fishcrosstag.up.railway.app${taggerUrl}` +
+  `?parentOrigin=${encodeURIComponent(window.location.origin)}` +
+  `&closeOnComplete=true`;
+
+window.open(fullTaggerUrl, "_blank");
+```
+
+Or embed as an iframe:
+
+```tsx
+<iframe src={fullTaggerUrl} title="FishCross tagger" />
+```
+
+Listen for browser completion:
+
+```ts
+window.addEventListener("message", (event) => {
+  if (event.origin !== "https://fishcrosstag.up.railway.app") return;
+  if (event.data?.type !== "fishcross-tagger:complete") return;
+
+  const result = event.data.payload;
+  console.log(result.annotations);
+});
+```
+
+If `webhookUrl` is provided, the same completion payload is also sent server-to-server. Use the browser message for immediate UI feedback and the webhook for durable backend handoff.
+
 Parent creates a session:
 
 ```http
