@@ -12,6 +12,7 @@ function defaultImageUrl() {
 export default function ParentDemo() {
   const [imageUrl, setImageUrl] = useState(defaultImageUrl);
   const [apiBase, setApiBase] = useState(apiBaseUrl);
+  const [webhookUrl, setWebhookUrl] = useState("");
   const [session, setSession] = useState<TaggerSession | null>(null);
   const [result, setResult] = useState<TaggerCompletePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -135,6 +136,7 @@ export default function ParentDemo() {
             source: "parent-demo",
             queueId: "needs-first-pass",
           },
+          webhookUrl: webhookUrl.trim() || undefined,
           options: {
             allowOneSidedFin: true,
             returnThumbnails: false,
@@ -168,6 +170,14 @@ export default function ParentDemo() {
               setApiBase(event.target.value);
               setApiBaseUrlOverride(event.target.value);
             }}
+          />
+        </label>
+        <label>
+          <span>Webhook URL</span>
+          <input
+            value={webhookUrl}
+            placeholder="https://your-parent-app.example/webhooks/fishcross"
+            onChange={(event) => setWebhookUrl(event.target.value)}
           />
         </label>
         <div className="parent-demo-actions">

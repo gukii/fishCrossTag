@@ -70,6 +70,12 @@ export type TaggerSession = {
   options?: Record<string, unknown>;
   draft?: unknown;
   result?: TaggerCompletePayload;
+  webhook?: {
+    delivered: boolean;
+    deliveredAt?: string;
+    status?: number;
+    error?: string;
+  };
   createdAt: string;
   updatedAt: string;
   completedAt?: string;

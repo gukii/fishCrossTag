@@ -109,9 +109,9 @@ The parent demo:
 3. embeds `/s/:sessionId` in an iframe
 4. lets the user tag the image with the current tagger UI
 5. saves the completed result through `POST /api/sessions/:id/complete`
-6. receives a browser message from the iframe and displays the completed JSON
+6. receives a browser message, SSE event, or polling update and displays the completed JSON
 
-This proves the standalone service shape without implementing webhook delivery yet.
+This proves the standalone service shape. If `webhookUrl` is included when creating the session, the API also POSTs the completed result to that URL.
 
 The parent demo can also run from GitHub Pages while using a Railway API. Open the GH Pages `/parent-demo` page and paste the Railway service URL into the `API URL` field:
 
@@ -120,6 +120,31 @@ https://your-railway-service.up.railway.app
 ```
 
 When a session is created, the iframe/new-tab tagger stays on the static site, but all `/api/sessions/*` calls go to Railway. The API URL is stored in browser local storage and also passed to `/s/:sessionId` as an `apiBase` query parameter.
+
+For production integration, the caller should usually pass a `webhookUrl` when creating the session. That makes completion server-to-server and avoids depending on the browser staying open.
+
+The current webhook delivery is intentionally simple: one POST attempt when the tagger completes. The session records the delivery status. Retry queues, signatures, and caller authentication are still future work.
+
+Webhook payload:
+
+```json
+{
+  "type": "fishcross.session.completed",
+  "sessionId": "session_...",
+  "image": {
+    "id": "image_123",
+    "url": "https://..."
+  },
+  "metadata": {},
+  "result": {
+    "sessionId": "session_...",
+    "imageId": "image_123",
+    "annotations": [],
+    "completedAt": "..."
+  },
+  "deliveredAt": "..."
+}
+```
 
 Current session endpoints:
 
@@ -130,7 +155,7 @@ POST /api/sessions/:sessionId/draft
 POST /api/sessions/:sessionId/complete
 ```
 
-Automatic caller logging and webhook delivery are intentionally deferred. The next step is to add caller identity, webhook signing, retryable delivery records, and manager-side webhook handling.
+SSE is still kept for browser-only demos because GitHub Pages cannot receive inbound webhook requests. A real parent backend can use the webhook as the primary completion channel.
 
 ## Railway Plan
 

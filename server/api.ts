@@ -1,5 +1,5 @@
 import { jsonResponse, nowIso, optionsResponse } from "./http";
-import { createSession, getSession, saveSessionDraft, completeSession } from "./sessionStore";
+import { createSession, getSession, saveSessionDraft, completeSession, saveSessionWebhookStatus } from "./sessionStore";
 import { dashboardSeed, deriveAnnotationBuckets, FishAnnotationPayload, TaggerCompletePayload, TaggerSession } from "../src/workflow";
 
 type RouteHandler = (request: Request, params: Record<string, string>) => Response | Promise<Response>;
@@ -49,6 +49,41 @@ function notifySessionListeners(sessionId: string, event: string, data: unknown)
     }
   }
   sessionEventListeners.delete(sessionId);
+}
+
+async function deliverCompletionWebhook(session: TaggerSession) {
+  if (!session.webhookUrl || !session.result) return undefined;
+
+  const deliveredAt = nowIso();
+  try {
+    const response = await globalThis.fetch(session.webhookUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "user-agent": "fishcross-tagger/0.1",
+      },
+      body: JSON.stringify({
+        type: "fishcross.session.completed",
+        sessionId: session.id,
+        image: session.image,
+        metadata: session.metadata ?? {},
+        result: session.result,
+        deliveredAt,
+      }),
+    });
+    return saveSessionWebhookStatus(session.id, {
+      delivered: response.ok,
+      deliveredAt,
+      status: response.status,
+      error: response.ok ? undefined : `Webhook returned ${response.status}`,
+    });
+  } catch (error) {
+    return saveSessionWebhookStatus(session.id, {
+      delivered: false,
+      deliveredAt,
+      error: error instanceof Error ? error.message : "Webhook delivery failed",
+    });
+  }
 }
 
 route("GET", "/api/health", () => jsonResponse({ ok: true, at: nowIso() }));
@@ -168,13 +203,14 @@ route("POST", "/api/sessions/:sessionId/draft", async (request, params) => {
 
 route("POST", "/api/sessions/:sessionId/complete", async (request, params) => {
   const payload = (await request.json()) as TaggerCompletePayload;
-  const session = completeSession(params.sessionId, payload);
+  let session = completeSession(params.sessionId, payload);
   if (!session?.result) return jsonResponse({ error: "Session not found" }, { status: 404 });
+  session = (await deliverCompletionWebhook(session)) ?? session;
   notifySessionListeners(params.sessionId, "session.completed", {
     sessionId: params.sessionId,
     result: session.result,
   });
-  return jsonResponse({ ok: true, sessionId: params.sessionId, completedAt: session.completedAt });
+  return jsonResponse({ ok: true, sessionId: params.sessionId, completedAt: session.completedAt, webhook: session.webhook });
 });
 
 route("GET", "/api/dashboard", () => {

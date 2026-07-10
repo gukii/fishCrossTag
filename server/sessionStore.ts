@@ -40,3 +40,15 @@ export function completeSession(sessionId: string, payload: TaggerCompletePayloa
   sessions.set(sessionId, updated);
   return updated;
 }
+
+export function saveSessionWebhookStatus(sessionId: string, webhook: NonNullable<TaggerSession["webhook"]>) {
+  const session = getSession(sessionId);
+  if (!session) return null;
+  const updated = {
+    ...session,
+    webhook,
+    updatedAt: nowIso(),
+  };
+  sessions.set(sessionId, updated);
+  return updated;
+}
