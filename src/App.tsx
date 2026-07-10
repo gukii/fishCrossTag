@@ -2186,7 +2186,19 @@ function CorrectedThumb({
   };
 
   return (
-    <button className={`thumb-card ${active ? "active" : ""}`} style={{ aspectRatio: `${thumbCrop.width * image.width} / ${thumbCrop.height * image.height}` }} onClick={onSelect}>
+    <div
+      className={`thumb-card ${active ? "active" : ""}`}
+      style={{ aspectRatio: `${thumbCrop.width * image.width} / ${thumbCrop.height * image.height}` }}
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        onSelect();
+      }}
+      aria-label="Select tagged fish"
+    >
       <div className="thumb-stage">
         <RotatedCropCanvas
           className="thumb-canvas"
@@ -2216,6 +2228,6 @@ function CorrectedThumb({
       >
         <X size={16} />
       </Button>
-    </button>
+    </div>
   );
 }

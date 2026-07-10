@@ -787,10 +787,16 @@ h2 {
   border-radius: 8px;
   background: transparent;
   box-shadow: none;
+  cursor: pointer;
 }
 
 .thumb-card.active {
   box-shadow: 0 0 0 3px #ff6b4d;
+}
+
+.thumb-card:focus-visible {
+  outline: 3px solid #55e5ff;
+  outline-offset: 3px;
 }
 
 .thumb-stage {
