@@ -6,6 +6,7 @@ type RouteHandler = (request: Request, params: Record<string, string>) => Respon
 const routes: Array<{ method: string; pattern: RegExp; keys: string[]; handler: RouteHandler }> = [];
 const sessionEventListeners = new Map<string, Set<ReadableStreamDefaultController<Uint8Array>>>();
 const textEncoder = new TextEncoder();
+const SESSION_EVENT_WINDOW_MS = 60_000;
 
 function route(method: string, path: string, handler: RouteHandler) {
   const keys = [...path.matchAll(/:([A-Za-z0-9_]+)/g)].map((match) => match[1]);
@@ -197,7 +198,7 @@ route("GET", "/api/sessions/:sessionId/events", (_request, params) => {
         } catch {
           // Client already disconnected.
         }
-      }, 30_000);
+      }, SESSION_EVENT_WINDOW_MS);
 
       _request.signal.addEventListener("abort", () => {
         clearTimeout(timeout);
