@@ -469,6 +469,15 @@ h2 {
   background: rgba(31, 143, 102, 0.88);
 }
 
+.session-complete-button {
+  color: #fff;
+  background: #138a58;
+}
+
+.session-complete-button:disabled {
+  opacity: 0.45;
+}
+
 .settings-dismiss {
   position: fixed;
   inset: 0;

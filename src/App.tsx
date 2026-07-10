@@ -1003,6 +1003,19 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     await onSessionComplete(payload);
   }
 
+  async function finishImage() {
+    if (!tags.length) return;
+    if (sessionMode) {
+      await completeSession();
+      return;
+    }
+    if (activeTag) {
+      finishTag();
+      return;
+    }
+    setDrawerOpen(true);
+  }
+
   async function exportCorrectedCrops() {
     if (!image || !tags.length) return;
     const sourceImage = sourceImageRef.current;
@@ -1872,17 +1885,15 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                   <Settings size={18} />
                 </Button>
 
-                {sessionMode && (
-                  <Button
-                    className="floating-mode-button session-complete-button"
-                    size="icon"
-                    disabled={!tags.length}
-                    onClick={completeSession}
-                    aria-label="Complete tagging session"
-                  >
-                    <Check size={19} />
-                  </Button>
-                )}
+                <Button
+                  className="floating-mode-button session-complete-button"
+                  size="icon"
+                  disabled={!tags.length || (sessionMode && !onSessionComplete)}
+                  onClick={finishImage}
+                  aria-label={sessionMode ? "Complete tagging session" : "Finish current image"}
+                >
+                  <Check size={19} />
+                </Button>
               </div>
 
               {settingsOpen && (
