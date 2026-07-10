@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ExternalLink, Play, RotateCcw } from "lucide-react";
+import { ExternalLink, Play, RefreshCw, RotateCcw } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { apiFetch } from "./apiClient";
 import { TaggerCompletePayload, TaggerSession } from "./workflow";
@@ -13,6 +13,7 @@ export default function ParentDemo() {
   const [session, setSession] = useState<TaggerSession | null>(null);
   const [result, setResult] = useState<TaggerCompletePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [polling, setPolling] = useState(false);
   const taggerUrl = useMemo(() => (session ? `${import.meta.env.BASE_URL}s/${session.id}` : ""), [session]);
 
   useEffect(() => {
@@ -20,10 +21,40 @@ export default function ParentDemo() {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type !== "fishcross-tagger:complete") return;
       setResult(event.data.payload as TaggerCompletePayload);
+      setPolling(false);
     }
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
   }, []);
+
+  useEffect(() => {
+    if (!session || result) return;
+    setPolling(true);
+    const interval = window.setInterval(() => {
+      refreshSession({ quiet: true });
+    }, 2000);
+    return () => {
+      window.clearInterval(interval);
+      setPolling(false);
+    };
+  }, [session?.id, result]);
+
+  async function refreshSession(options: { quiet?: boolean } = {}) {
+    if (!session) return;
+    if (!options.quiet) setError(null);
+    try {
+      const nextSession = await apiFetch<TaggerSession>(`/api/sessions/${session.id}`);
+      setSession(nextSession);
+      if (nextSession.result) {
+        setResult(nextSession.result);
+        setPolling(false);
+      }
+    } catch (refreshError) {
+      if (!options.quiet) {
+        setError(refreshError instanceof Error ? refreshError.message : "Could not refresh session");
+      }
+    }
+  }
 
   async function createSession() {
     setError(null);
@@ -48,6 +79,7 @@ export default function ParentDemo() {
         }),
       });
       setSession(response.session);
+      setPolling(true);
     } catch (createError) {
       setError(createError instanceof Error ? createError.message : "Could not create session");
     }
@@ -75,11 +107,18 @@ export default function ParentDemo() {
               setSession(null);
               setResult(null);
               setError(null);
+              setPolling(false);
             }}
           >
             <RotateCcw size={16} />
             Reset
           </Button>
+          {session && (
+            <Button variant="secondary" onClick={() => refreshSession()}>
+              <RefreshCw size={16} />
+              Refresh
+            </Button>
+          )}
           {taggerUrl && (
             <a className="parent-demo-open" href={taggerUrl} target="_blank" rel="noreferrer">
               <ExternalLink size={16} />
@@ -92,6 +131,7 @@ export default function ParentDemo() {
           <div className="parent-demo-meta">
             <strong>Session</strong>
             <code>{session.id}</code>
+            <span>{result ? "Completed" : polling ? "Waiting for completion..." : "Open"}</span>
           </div>
         )}
         {result && (
