@@ -2,14 +2,15 @@
 
 Mobile-first koi annotation tooling for line-based fish tagging, dataset management, and iterative YOLO training.
 
-The current production-style GitHub Pages tagger should stay on `main`. The dashboard/API/Railway work lives on the `tanstack-dashboard` branch.
+The current production-style GitHub Pages tagger should stay on `main`. The Railway session service lives on `railway-session-service`.
 
 ## Branches
 
-- `main`: current GitHub Pages tagger app.
-- `tanstack-dashboard`: dashboard, workflow, Bun API, SQLite, and future Railway deployment work.
+- `main`: current GitHub Pages static tagger app.
+- `railway-session-service`: Bun API, embeddable session route, parent-demo, webhook delivery, and Railway deployment config.
+- `tanstack-dashboard`: old working branch name kept for now; use `railway-session-service` for new Railway deployments.
 
-Keep GitHub Pages pointed at `main` until the dashboard branch is ready to become a separate deployed app.
+Keep GitHub Pages pointed at `main`. Point Railway at `railway-session-service`.
 
 ## Local Development
 
