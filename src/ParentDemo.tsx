@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ExternalLink, Play, RefreshCw, RotateCcw } from "lucide-react";
 import { Button } from "./components/ui/button";
-import { apiFetch } from "./apiClient";
+import { apiBaseUrl, apiFetch } from "./apiClient";
 import { TaggerCompletePayload, TaggerSession } from "./workflow";
 
 function defaultImageUrl() {
@@ -30,10 +30,24 @@ export default function ParentDemo() {
   useEffect(() => {
     if (!session || result) return;
     setPolling(true);
+    const events = new EventSource(`${apiBaseUrl()}/api/sessions/${session.id}/events`);
+    events.addEventListener("session.completed", (event) => {
+      const data = JSON.parse((event as MessageEvent).data) as { result: TaggerCompletePayload };
+      setResult(data.result);
+      setPolling(false);
+      events.close();
+    });
+    events.addEventListener("session.timeout", () => {
+      events.close();
+    });
+    events.onerror = () => {
+      events.close();
+    };
     const interval = window.setInterval(() => {
       refreshSession({ quiet: true });
-    }, 2000);
+    }, 5000);
     return () => {
+      events.close();
       window.clearInterval(interval);
       setPolling(false);
     };

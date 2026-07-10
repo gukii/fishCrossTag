@@ -4,6 +4,8 @@ import { deriveAnnotationBuckets, FishAnnotationPayload, TaggerCompletePayload, 
 type RouteHandler = (request: Request, params: Record<string, string>) => Response | Promise<Response>;
 
 const routes: Array<{ method: string; pattern: RegExp; keys: string[]; handler: RouteHandler }> = [];
+const sessionEventListeners = new Map<string, Set<ReadableStreamDefaultController<Uint8Array>>>();
+const textEncoder = new TextEncoder();
 
 function route(method: string, path: string, handler: RouteHandler) {
   const keys = [...path.matchAll(/:([A-Za-z0-9_]+)/g)].map((match) => match[1]);
@@ -21,6 +23,25 @@ function rows<T>(sql: string, params: unknown[] = []) {
 
 function row<T>(sql: string, params: unknown[] = []) {
   return db.query(sql).get(...params) as T | null;
+}
+
+function encodeSse(event: string, data: unknown) {
+  return textEncoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+function notifySessionListeners(sessionId: string, event: string, data: unknown) {
+  const listeners = sessionEventListeners.get(sessionId);
+  if (!listeners) return;
+  const encoded = encodeSse(event, data);
+  for (const listener of listeners) {
+    try {
+      listener.enqueue(encoded);
+      listener.close();
+    } catch {
+      // Client already disconnected.
+    }
+  }
+  sessionEventListeners.delete(sessionId);
 }
 
 type SessionRow = {
@@ -142,6 +163,60 @@ route("GET", "/api/sessions/:sessionId", (_request, params) => {
   return jsonResponse(sessionFromRow(session));
 });
 
+route("GET", "/api/sessions/:sessionId/events", (_request, params) => {
+  const session = row<SessionRow>("select * from tagger_sessions where id = ?", [params.sessionId]);
+  if (!session) return jsonResponse({ error: "Session not found" }, { status: 404 });
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (session.status === "completed" && session.result_json) {
+        controller.enqueue(
+          encodeSse("session.completed", {
+            sessionId: params.sessionId,
+            result: JSON.parse(session.result_json),
+          }),
+        );
+        controller.close();
+        return;
+      }
+
+      let listeners = sessionEventListeners.get(params.sessionId);
+      if (!listeners) {
+        listeners = new Set();
+        sessionEventListeners.set(params.sessionId, listeners);
+      }
+      listeners.add(controller);
+      controller.enqueue(encodeSse("session.open", { sessionId: params.sessionId }));
+
+      const timeout = setTimeout(() => {
+        listeners?.delete(controller);
+        if (listeners?.size === 0) sessionEventListeners.delete(params.sessionId);
+        try {
+          controller.enqueue(encodeSse("session.timeout", { sessionId: params.sessionId }));
+          controller.close();
+        } catch {
+          // Client already disconnected.
+        }
+      }, 30_000);
+
+      _request.signal.addEventListener("abort", () => {
+        clearTimeout(timeout);
+        listeners?.delete(controller);
+        if (listeners?.size === 0) sessionEventListeners.delete(params.sessionId);
+      });
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "Content-Type": "text/event-stream",
+    },
+  });
+});
+
 route("POST", "/api/sessions/:sessionId/draft", async (request, params) => {
   const draft = await request.json();
   const updatedAt = nowIso();
@@ -153,10 +228,15 @@ route("POST", "/api/sessions/:sessionId/draft", async (request, params) => {
 route("POST", "/api/sessions/:sessionId/complete", async (request, params) => {
   const payload = (await request.json()) as TaggerCompletePayload;
   const completedAt = nowIso();
+  const completedPayload = { ...payload, sessionId: params.sessionId, completedAt };
   const result = db
     .query("update tagger_sessions set result_json = ?, status = 'completed', completed_at = ?, updated_at = ? where id = ?")
-    .run(JSON.stringify({ ...payload, sessionId: params.sessionId, completedAt }), completedAt, completedAt, params.sessionId);
+    .run(JSON.stringify(completedPayload), completedAt, completedAt, params.sessionId);
   if (result.changes === 0) return jsonResponse({ error: "Session not found" }, { status: 404 });
+  notifySessionListeners(params.sessionId, "session.completed", {
+    sessionId: params.sessionId,
+    result: completedPayload,
+  });
   return jsonResponse({ ok: true, sessionId: params.sessionId, completedAt });
 });
 
