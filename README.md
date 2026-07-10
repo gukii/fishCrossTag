@@ -146,6 +146,38 @@ For production integration, the caller should usually pass a `webhookUrl` when c
 
 The current webhook delivery is intentionally simple: one POST attempt when the tagger completes. The session records the delivery status. Retry queues, signatures, and caller authentication are still future work.
 
+## Security Status
+
+The current Railway proof does not use a secret.
+
+Current behavior:
+
+- `POST /api/sessions` is open.
+- Webhook delivery is not signed.
+- Image URLs are trusted as provided by the caller.
+- `parentOrigin` is passed in the tagger URL and used for browser `postMessage`.
+- Sessions are stored in memory and disappear on restart/sleep.
+
+This is acceptable for trusted testing, but not production.
+
+Production controls to add:
+
+- Require an API key when creating sessions:
+
+```txt
+Authorization: Bearer <FISHCROSS_API_KEY>
+```
+
+- Sign webhook payloads with HMAC:
+
+```txt
+X-FishCross-Signature: sha256=...
+```
+
+- Use short-lived signed launch URLs if the parent opens a one-step `/tag?imageUrl=...` URL.
+- Persist sessions and webhook delivery records.
+- Validate allowed caller origins instead of accepting arbitrary `parentOrigin` values.
+
 To test webhook delivery without a parent backend:
 
 1. Open `https://webhook.site/`.
@@ -531,12 +563,14 @@ That is acceptable for the proof. Persistent storage should be added before prod
 ## Near-Term Implementation Steps
 
 1. Add persistent session storage, likely SQLite on a Railway volume first.
-2. Add webhook signing, retry records, and a resend endpoint.
-3. Add caller identity so sessions can be tied to a parent app/user/queue.
-4. Add upload pipeline and object storage adapter for originals and exports.
-5. Move large previews/exports out of JSON payloads and into object storage URLs.
-6. Make `/dashboard` fetch live queue/session/training data.
-7. Add dataset export jobs for YOLO training.
-8. Add training-run orchestration for RunPod/Vast workers.
+2. Add API-key authentication for session creation.
+3. Add webhook signing, retry records, and a resend endpoint.
+4. Add caller identity so sessions can be tied to a parent app/user/queue.
+5. Add signed launch URLs for one-step `/tag?imageUrl=...` integration.
+6. Add upload pipeline and object storage adapter for originals and exports.
+7. Move large previews/exports out of JSON payloads and into object storage URLs.
+8. Make `/dashboard` fetch live queue/session/training data.
+9. Add dataset export jobs for YOLO training.
+10. Add training-run orchestration for RunPod/Vast workers.
 
 Keep the current GitHub Pages tagger stable on `main`. Build Railway session orchestration on `railway-session-service`.
