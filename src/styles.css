@@ -437,7 +437,7 @@ h2 {
   position: fixed;
   right: max(14px, env(safe-area-inset-right));
   bottom: max(14px, env(safe-area-inset-bottom));
-  z-index: 30;
+  z-index: 50;
   display: grid;
   gap: 8px;
   max-height: calc(100svh - 28px);
@@ -481,7 +481,7 @@ h2 {
 .settings-dismiss {
   position: fixed;
   inset: 0;
-  z-index: 30;
+  z-index: 25;
   padding: 0;
   background: transparent;
   cursor: default;
@@ -492,7 +492,7 @@ h2 {
   position: fixed;
   right: max(94px, calc(env(safe-area-inset-right) + 94px));
   bottom: max(14px, env(safe-area-inset-bottom));
-  z-index: 31;
+  z-index: 45;
   width: min(280px, calc(100vw - 118px));
   display: grid;
   gap: 10px;
@@ -744,7 +744,7 @@ h2 {
   right: auto;
   bottom: 0;
   z-index: 20;
-  width: min(calc(100vw - 104px - env(safe-area-inset-right)), 520px);
+  width: min(calc(100vw - 120px - env(safe-area-inset-right)), 500px);
   display: grid;
   gap: 8px;
   padding: 8px 14px max(14px, env(safe-area-inset-bottom));
@@ -875,10 +875,10 @@ h2 {
   }
 
   .thumb-drawer {
-    left: auto;
-    right: 92px;
+    left: 24px;
+    right: auto;
     bottom: 24px;
-    width: min(360px, calc(100vw - 116px));
+    width: min(500px, calc(100vw - 144px));
     border: 1px solid rgba(24, 32, 29, 0.12);
     border-radius: 16px;
     padding-bottom: 12px;
