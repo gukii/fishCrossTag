@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, Play, RefreshCw, RotateCcw } from "lucide-react";
 import { Button } from "./components/ui/button";
-import { apiBaseUrl, apiFetch } from "./apiClient";
+import { apiBaseUrl, apiFetch, setApiBaseUrlOverride } from "./apiClient";
 import { subscribeToSessionComplete } from "./sessionEvents";
 import { TaggerCompletePayload, TaggerSession } from "./workflow";
 
@@ -11,12 +11,17 @@ function defaultImageUrl() {
 
 export default function ParentDemo() {
   const [imageUrl, setImageUrl] = useState(defaultImageUrl);
+  const [apiBase, setApiBase] = useState(apiBaseUrl);
   const [session, setSession] = useState<TaggerSession | null>(null);
   const [result, setResult] = useState<TaggerCompletePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
-  const taggerUrl = useMemo(() => (session ? `${import.meta.env.BASE_URL}s/${session.id}` : ""), [session]);
+  const taggerUrl = useMemo(() => {
+    if (!session) return "";
+    const params = new URLSearchParams({ apiBase });
+    return `${import.meta.env.BASE_URL}s/${session.id}?${params.toString()}`;
+  }, [apiBase, session]);
 
   useEffect(() => {
     sessionIdRef.current = session?.id ?? null;
@@ -117,6 +122,7 @@ export default function ParentDemo() {
     setError(null);
     setResult(null);
     try {
+      setApiBaseUrlOverride(apiBase);
       const response = await apiFetch<{ session: TaggerSession; taggerUrl: string }>("/api/sessions", {
         method: "POST",
         body: JSON.stringify({
@@ -152,6 +158,17 @@ export default function ParentDemo() {
         <label>
           <span>Photo URL</span>
           <input value={imageUrl} onChange={(event) => setImageUrl(event.target.value)} />
+        </label>
+        <label>
+          <span>API URL</span>
+          <input
+            value={apiBase}
+            placeholder="https://your-railway-app.up.railway.app"
+            onChange={(event) => {
+              setApiBase(event.target.value);
+              setApiBaseUrlOverride(event.target.value);
+            }}
+          />
         </label>
         <div className="parent-demo-actions">
           <Button onClick={createSession}>

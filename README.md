@@ -47,16 +47,18 @@ http://localhost:3000/api/dashboard
 http://localhost:3000/api/sessions/:id
 ```
 
-SQLite defaults to:
-
-```txt
-data/koi-tag-line.sqlite
-```
-
-For local testing with another path:
+For a one-process local check after building:
 
 ```bash
-SQLITE_PATH=/tmp/koi-tag-line.sqlite pnpm dev:api
+pnpm build
+pnpm start
+```
+
+Then open:
+
+```txt
+http://localhost:3000/
+http://localhost:3000/parent-demo
 ```
 
 ## Current App Shape
@@ -69,7 +71,7 @@ Frontend routes are currently simple pathname switches:
 - `/parent-demo`: local proof that a parent app can create and embed a tagger session
 - `/s/:sessionId`: standalone tagger session route
 
-The dashboard currently uses seed data. The Bun API has the first schema and endpoint skeleton for:
+The dashboard currently uses seed data. The Bun API uses in-memory sessions for the first Railway proof and has endpoint skeletons for:
 
 - image batches
 - images
@@ -111,6 +113,14 @@ The parent demo:
 
 This proves the standalone service shape without implementing webhook delivery yet.
 
+The parent demo can also run from GitHub Pages while using a Railway API. Open the GH Pages `/parent-demo` page and paste the Railway service URL into the `API URL` field:
+
+```txt
+https://your-railway-service.up.railway.app
+```
+
+When a session is created, the iframe/new-tab tagger stays on the static site, but all `/api/sessions/*` calls go to Railway. The API URL is stored in browser local storage and also passed to `/s/:sessionId` as an `apiBase` query parameter.
+
 Current session endpoints:
 
 ```txt
@@ -126,31 +136,49 @@ Automatic caller logging and webhook delivery are intentionally deferred. The ne
 
 Use Railway for orchestration, not GPU training.
 
-Recommended first deployment:
+First deployment:
 
 ```txt
-fishcross-api
-  Bun API
-  SQLite on Railway volume
-  object storage credentials
-
-fishcross-dashboard
-  React dashboard
-  calls fishcross-api
+fishcross-tagger
+  Bun server
+  serves /api/*
+  serves the built React app from dist/
+  stores sessions in memory
 ```
 
-Later this can become one service where Bun serves both the API and the built dashboard assets.
+Railway build/start:
 
-Required Railway variables:
+```txt
+Build command: pnpm build
+Start command: pnpm start
+```
+
+Railway sets `PORT` automatically. No SQLite volume is needed for this proof.
+
+Important limitation: in-memory sessions disappear when the service restarts. That is acceptable for proving the parent-app/session workflow, but not for production tagging.
+
+After Railway deploys, test:
+
+```txt
+https://your-railway-service.up.railway.app/api/health
+https://your-railway-service.up.railway.app/parent-demo
+```
+
+To test from GitHub Pages instead, open the GH Pages `/parent-demo` route and use the same Railway URL in the `API URL` field.
+
+Later production deployment:
+
+```txt
+fishcross-tagger
+  Bun API + React app
+  SQLite or Postgres metadata store
+  object storage credentials
+```
+
+Future persistent storage variables:
 
 ```txt
 SQLITE_PATH=/data/koi-tag-line.sqlite
-PORT=3000
-```
-
-Future object storage variables:
-
-```txt
 OBJECT_STORAGE_ENDPOINT=
 OBJECT_STORAGE_BUCKET=
 OBJECT_STORAGE_ACCESS_KEY_ID=
@@ -158,7 +186,7 @@ OBJECT_STORAGE_SECRET_ACCESS_KEY=
 OBJECT_STORAGE_PUBLIC_BASE_URL=
 ```
 
-Mount a Railway volume at:
+If SQLite is used later, mount a Railway volume at:
 
 ```txt
 /data
