@@ -1441,6 +1441,15 @@ export default function App() {
     setFinDeleteTagId(null);
   }
 
+  function finishImage() {
+    if (!tags.length) return;
+    if (activeTag) {
+      finishTag();
+      return;
+    }
+    setDrawerOpen(true);
+  }
+
   function deleteActiveTag() {
     if (!activeTag) return;
     deleteTagById(activeTag.id);
@@ -1799,6 +1808,16 @@ export default function App() {
                   aria-label={settingsOpen ? "Hide settings" : "Show settings"}
                 >
                   <Settings size={18} />
+                </Button>
+
+                <Button
+                  className="floating-mode-button session-complete-button"
+                  size="icon"
+                  disabled={!tags.length}
+                  onClick={finishImage}
+                  aria-label="Finish current image"
+                >
+                  <Check size={19} />
                 </Button>
               </div>
 
