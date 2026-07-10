@@ -1,6 +1,9 @@
 [phases.setup]
 nixPkgs = ["nodejs_22", "bun"]
 
+[phases.install]
+cmds = ["npm install -g pnpm@10.18.3", "pnpm install --frozen-lockfile"]
+
 [variables]
 NODE_VERSION = "22.12.0"
 NIXPACKS_NODE_VERSION = "22.12.0"
