@@ -1,0 +1,9 @@
+dist
+node_modules
+.git
+.agents
+.codex
+.DS_Store
+data
+*.sqlite
+*.db
