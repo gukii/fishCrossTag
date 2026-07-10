@@ -30,26 +30,55 @@ export default function ParentDemo() {
   useEffect(() => {
     if (!session || result) return;
     setPolling(true);
-    const events = new EventSource(`${apiBaseUrl()}/api/sessions/${session.id}/events`);
-    events.addEventListener("session.completed", (event) => {
-      const data = JSON.parse((event as MessageEvent).data) as { result: TaggerCompletePayload };
-      setResult(data.result);
-      setPolling(false);
-      events.close();
-    });
-    events.addEventListener("session.timeout", () => {
-      events.close();
-    });
-    events.onerror = () => {
-      events.close();
-    };
+    let stopped = false;
+    let events: EventSource | null = null;
+    let reconnectTimer: number | undefined;
+
+    function reconnect() {
+      events?.close();
+      if (stopped) return;
+      reconnectTimer = window.setTimeout(connect, 250);
+    }
+
+    function connect() {
+      if (stopped || !session) return;
+      events = new EventSource(`${apiBaseUrl()}/api/sessions/${session.id}/events`);
+      events.addEventListener("session.completed", (event) => {
+        const data = JSON.parse((event as MessageEvent).data) as { result: TaggerCompletePayload };
+        stopped = true;
+        setResult(data.result);
+        setPolling(false);
+        events?.close();
+      });
+      events.addEventListener("session.timeout", reconnect);
+      events.onerror = reconnect;
+    }
+
+    connect();
     const interval = window.setInterval(() => {
       refreshSession({ quiet: true });
     }, 5000);
     return () => {
-      events.close();
+      stopped = true;
+      events?.close();
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
       window.clearInterval(interval);
       setPolling(false);
+    };
+  }, [session?.id, result]);
+
+  useEffect(() => {
+    if (!session || result) return;
+    function refreshWhenVisible() {
+      if (document.visibilityState === "visible") {
+        refreshSession({ quiet: true });
+      }
+    }
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
   }, [session?.id, result]);
 
