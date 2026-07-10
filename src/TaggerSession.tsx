@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import App from "./App";
 import { apiFetch } from "./apiClient";
+import { broadcastSessionComplete } from "./sessionEvents";
 import { TaggerCompletePayload, TaggerSession as TaggerSessionData } from "./workflow";
 
 type LoadedImage = {
@@ -67,6 +68,7 @@ export default function TaggerSession() {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    broadcastSessionComplete(sessionId, payload);
     window.parent?.postMessage(
       {
         type: "fishcross-tagger:complete",

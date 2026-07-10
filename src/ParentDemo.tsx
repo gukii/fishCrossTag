@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, Play, RefreshCw, RotateCcw } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { apiBaseUrl, apiFetch } from "./apiClient";
+import { subscribeToSessionComplete } from "./sessionEvents";
 import { TaggerCompletePayload, TaggerSession } from "./workflow";
 
 function defaultImageUrl() {
@@ -14,7 +15,12 @@ export default function ParentDemo() {
   const [result, setResult] = useState<TaggerCompletePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [polling, setPolling] = useState(false);
+  const sessionIdRef = useRef<string | null>(null);
   const taggerUrl = useMemo(() => (session ? `${import.meta.env.BASE_URL}s/${session.id}` : ""), [session]);
+
+  useEffect(() => {
+    sessionIdRef.current = session?.id ?? null;
+  }, [session?.id]);
 
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
@@ -23,8 +29,16 @@ export default function ParentDemo() {
       setResult(event.data.payload as TaggerCompletePayload);
       setPolling(false);
     }
+    const unsubscribe = subscribeToSessionComplete((event) => {
+      if (event.sessionId !== sessionIdRef.current) return;
+      setResult(event.payload);
+      setPolling(false);
+    });
     window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("message", handleMessage);
+    };
   }, []);
 
   useEffect(() => {
