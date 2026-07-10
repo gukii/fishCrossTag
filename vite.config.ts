@@ -17,4 +17,7 @@ export default defineConfig({
       protocol: "ws",
     },
   },
+  preview: {
+    allowedHosts: ["fishcrosstag.up.railway.app"],
+  },
 });
