@@ -45,6 +45,12 @@ export type TaggerSessionImage = {
 export type TaggerAnnotationResult = FishAnnotationPayload & {
   fishId: string;
   buckets: AnnotationBucket[];
+  preview?: {
+    dataUrl: string;
+    width: number;
+    height: number;
+    mimeType: "image/jpeg";
+  };
   cropSettings?: {
     marginXByLength: number;
     marginYByLength: number;

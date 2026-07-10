@@ -965,6 +965,37 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     paintMarginVignette(canvas, cropRectPx(crop, innerBox, image));
   }
 
+  function correctedPreview(tag: KoiTag) {
+    const sourceImage = sourceImageRef.current;
+    if (!image || !sourceImage) return undefined;
+
+    const geometry = correctedGeometry(tag, image);
+    const crop = displayCrop(tag, image, geometry.correctedBox, cropSettings);
+    const cropCanvas = document.createElement("canvas");
+    drawCorrectedCropToCanvas(cropCanvas, sourceImage, tag, crop, geometry.rotation);
+    if (cropSettings.applyVignette) {
+      drawCanvasVignette(cropCanvas, crop, geometry.correctedBox);
+    }
+
+    const maxHeight = 360;
+    const scale = Math.min(1, maxHeight / Math.max(1, cropCanvas.height));
+    const width = Math.max(1, Math.round(cropCanvas.width * scale));
+    const height = Math.max(1, Math.round(cropCanvas.height * scale));
+    const outputCanvas = document.createElement("canvas");
+    outputCanvas.width = width;
+    outputCanvas.height = height;
+    const context = outputCanvas.getContext("2d");
+    if (!context) return undefined;
+    context.drawImage(cropCanvas, 0, 0, width, height);
+
+    return {
+      dataUrl: outputCanvas.toDataURL("image/jpeg", 0.82),
+      width,
+      height,
+      mimeType: "image/jpeg" as const,
+    };
+  }
+
   function serializeTag(tag: KoiTag): TaggerAnnotationResult | null {
     if (!image) return null;
     const geometry = correctedGeometry(tag, image);
@@ -977,6 +1008,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       correctedPolygon: orientedCorrectedBoxPoints(tag, image),
       imageWidth: image.width,
       imageHeight: image.height,
+      preview: correctedPreview(tag),
       cropSettings: {
         marginXByLength: cropSettings.marginXByLength,
         marginYByLength: cropSettings.marginYByLength,

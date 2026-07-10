@@ -1086,11 +1086,14 @@ h2 {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  border: 0;
   border-radius: 8px;
   padding: 0 12px;
   color: #22302b;
   background: #e6ebe7;
   text-decoration: none;
+  cursor: pointer;
+  font-family: inherit;
   font-size: 0.86rem;
   font-weight: 850;
 }
@@ -1125,6 +1128,45 @@ h2 {
 .parent-demo-result pre {
   max-height: 42dvh;
   margin: 0;
+}
+
+.parent-demo-thumbs {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 4px 0 8px;
+}
+
+.parent-demo-thumbs figure {
+  position: relative;
+  flex: 0 0 auto;
+  height: 132px;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #151918;
+}
+
+.parent-demo-thumbs img {
+  display: block;
+  width: auto;
+  height: 100%;
+}
+
+.parent-demo-thumbs figcaption {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  min-width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  color: #fff;
+  font-weight: 900;
+  line-height: 1;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.72);
 }
 
 .parent-demo-frame-wrap {

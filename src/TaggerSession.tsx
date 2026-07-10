@@ -17,6 +17,10 @@ function sessionIdFromPath() {
   return path.split("/").filter(Boolean)[1] ?? "";
 }
 
+function sessionParams() {
+  return new URLSearchParams(window.location.search);
+}
+
 function probeImage(session: TaggerSessionData) {
   return new Promise<LoadedImage>((resolve, reject) => {
     const image = new Image();
@@ -69,15 +73,22 @@ export default function TaggerSession() {
       body: JSON.stringify(payload),
     });
     broadcastSessionComplete(sessionId, payload);
-    window.parent?.postMessage(
-      {
-        type: "fishcross-tagger:complete",
-        sessionId,
-        payload,
-      },
-      window.location.origin,
-    );
+    const message = {
+      type: "fishcross-tagger:complete",
+      sessionId,
+      payload,
+    };
+    const parentOrigin = sessionParams().get("parentOrigin") || "*";
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(message, parentOrigin);
+    }
+    if (window.opener) {
+      window.opener.postMessage(message, parentOrigin);
+    }
     setStatus("complete");
+    if (window.opener && sessionParams().get("closeOnComplete") !== "false") {
+      window.setTimeout(() => window.close(), 120);
+    }
   }
 
   if (status === "loading") {

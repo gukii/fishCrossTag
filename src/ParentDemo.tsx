@@ -20,7 +20,11 @@ export default function ParentDemo() {
   const sessionIdRef = useRef<string | null>(null);
   const taggerUrl = useMemo(() => {
     if (!session) return "";
-    const params = new URLSearchParams({ apiBase });
+    const params = new URLSearchParams({
+      apiBase,
+      closeOnComplete: "true",
+      parentOrigin: window.location.origin,
+    });
     return `${import.meta.env.BASE_URL}s/${session.id}?${params.toString()}`;
   }, [apiBase, session]);
 
@@ -139,7 +143,7 @@ export default function ParentDemo() {
           webhookUrl: webhookUrl.trim() || undefined,
           options: {
             allowOneSidedFin: true,
-            returnThumbnails: false,
+            returnThumbnails: true,
           },
         }),
       });
@@ -204,10 +208,10 @@ export default function ParentDemo() {
             </Button>
           )}
           {taggerUrl && (
-            <a className="parent-demo-open" href={taggerUrl} target="_blank" rel="noreferrer">
+            <button className="parent-demo-open" type="button" onClick={() => window.open(taggerUrl, "_blank")}>
               <ExternalLink size={16} />
               New tab
-            </a>
+            </button>
           )}
         </div>
         {error && <p className="parent-demo-error">{error}</p>}
@@ -220,17 +224,28 @@ export default function ParentDemo() {
         )}
         {result && (
           <div className="parent-demo-result">
-            <strong>Completed result</strong>
+            <strong>Tagged fish</strong>
+            <div className="parent-demo-thumbs">
+              {result.annotations.map((annotation, index) =>
+                annotation.preview ? (
+                  <figure key={annotation.fishId}>
+                    <img src={annotation.preview.dataUrl} alt={`Tagged fish ${index + 1}`} />
+                    <figcaption>{index + 1}</figcaption>
+                  </figure>
+                ) : null,
+              )}
+            </div>
+            <strong>Completed JSON</strong>
             <pre>{JSON.stringify(result, null, 2)}</pre>
           </div>
         )}
       </section>
 
       <section className="parent-demo-frame-wrap">
-        {session ? (
+        {session && !result ? (
           <iframe className="parent-demo-frame" src={taggerUrl} title="FishCross tagger session" />
         ) : (
-          <div className="parent-demo-empty">Create a session to load the tagger here.</div>
+          <div className="parent-demo-empty">{result ? "Tagger closed. Result received." : "Create a session to load the tagger here."}</div>
         )}
       </section>
     </main>
