@@ -1,4 +1,4 @@
-import { db, jsonResponse, nowIso } from "./db";
+import { db, jsonResponse, nowIso, optionsResponse } from "./db";
 import { deriveAnnotationBuckets, FishAnnotationPayload, TaggerCompletePayload, TaggerSession } from "../src/workflow";
 
 type RouteHandler = (request: Request, params: Record<string, string>) => Response | Promise<Response>;
@@ -296,7 +296,7 @@ function matchRoute(request: Request) {
 }
 
 export async function fetch(request: Request) {
-  if (request.method === "OPTIONS") return jsonResponse({});
+  if (request.method === "OPTIONS") return optionsResponse();
   const matched = matchRoute(request);
   if (!matched) return jsonResponse({ error: "Not found" }, { status: 404 });
 
