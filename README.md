@@ -30,8 +30,6 @@ Open:
 
 ```txt
 http://127.0.0.1:5185/
-http://127.0.0.1:5185/dashboard
-http://127.0.0.1:5185/parent-demo
 ```
 
 Run the Bun API:
@@ -62,6 +60,8 @@ http://localhost:3000/
 http://localhost:3000/parent-demo
 ```
 
+The local one-process check is the closest match to Railway because Bun serves both `/api/*` and the built React app.
+
 ## Current App Shape
 
 Frontend routes are currently simple pathname switches:
@@ -86,9 +86,27 @@ The dashboard currently uses seed data. The Bun API uses in-memory sessions for 
 - model versions
 - tagger sessions
 
-## Standalone Tagger Proof
+## Current Deployments
 
-The `tanstack-dashboard` branch now includes a minimal standalone tagger proof.
+GitHub Pages static tagger:
+
+```txt
+https://gukii.github.io/fishCrossTag/
+```
+
+Railway session service:
+
+```txt
+https://fishcrosstag.up.railway.app/
+https://fishcrosstag.up.railway.app/api/health
+https://fishcrosstag.up.railway.app/parent-demo
+```
+
+Use Railway for the parent/session proof. GitHub Pages currently hosts only the stable static tagger on `main`.
+
+## Standalone Session Flow
+
+The `railway-session-service` branch includes the standalone tagger/session proof.
 
 Run both processes:
 
@@ -107,24 +125,34 @@ The parent demo:
 
 1. accepts a photo URL
 2. creates a tagger session through `POST /api/sessions`
-3. embeds `/s/:sessionId` in an iframe
+3. embeds `/s/:sessionId` in an iframe or opens it in a new tab
 4. lets the user tag the image with the current tagger UI
-5. saves the completed result through `POST /api/sessions/:id/complete`
-6. receives a browser message, SSE event, or polling update and displays the completed JSON
+5. saves the completed result through `POST /api/sessions/:id/complete` when the green checkmark is clicked
+6. receives a browser message, SSE event, or polling update
+7. hides/closes the tagger UI and displays corrected fish previews plus the completed JSON
 
 This proves the standalone service shape. If `webhookUrl` is included when creating the session, the API also POSTs the completed result to that URL.
 
-The parent demo can also run from GitHub Pages while using a Railway API. Open the GH Pages `/parent-demo` page and paste the Railway service URL into the `API URL` field:
+In the Railway parent demo use:
 
 ```txt
-https://your-railway-service.up.railway.app
+API URL: https://fishcrosstag.up.railway.app
+Webhook URL: leave empty for normal browser demo testing
 ```
 
-When a session is created, the iframe/new-tab tagger stays on the static site, but all `/api/sessions/*` calls go to Railway. The API URL is stored in browser local storage and also passed to `/s/:sessionId` as an `apiBase` query parameter.
+The new-tab path uses `window.open(...)` so the tagger tab keeps `window.opener`. Do not add `rel="noreferrer"` to the parent link/button because that prevents the tagger tab from sending the result back and closing itself.
 
 For production integration, the caller should usually pass a `webhookUrl` when creating the session. That makes completion server-to-server and avoids depending on the browser staying open.
 
 The current webhook delivery is intentionally simple: one POST attempt when the tagger completes. The session records the delivery status. Retry queues, signatures, and caller authentication are still future work.
+
+To test webhook delivery without a parent backend:
+
+1. Open `https://webhook.site/`.
+2. Copy the unique URL.
+3. Paste it into `Webhook URL`.
+4. Create a session, tag a fish, and click the green checkmark.
+5. Confirm webhook.site received the POST.
 
 Webhook payload:
 
@@ -140,7 +168,22 @@ Webhook payload:
   "result": {
     "sessionId": "session_...",
     "imageId": "image_123",
-    "annotations": [],
+    "annotations": [
+      {
+        "fishId": "...",
+        "bodyLine": [],
+        "finLine": [],
+        "correctedBox": {},
+        "correctedPolygon": [],
+        "buckets": [],
+        "preview": {
+          "dataUrl": "data:image/jpeg;base64,...",
+          "width": 120,
+          "height": 360,
+          "mimeType": "image/jpeg"
+        }
+      }
+    ],
     "completedAt": "..."
   },
   "deliveredAt": "..."
@@ -152,6 +195,7 @@ Current session endpoints:
 ```txt
 POST /api/sessions
 GET  /api/sessions/:sessionId
+GET  /api/sessions/:sessionId/events
 POST /api/sessions/:sessionId/draft
 POST /api/sessions/:sessionId/complete
 ```
@@ -162,7 +206,7 @@ SSE is still kept for browser-only demos because GitHub Pages cannot receive inb
 
 Use Railway for orchestration, not GPU training.
 
-First deployment:
+Current first deployment:
 
 ```txt
 fishcross-tagger
@@ -175,11 +219,28 @@ fishcross-tagger
 Railway build/start:
 
 ```txt
-Build command: pnpm build
-Start command: pnpm start
+Branch: railway-session-service
+Builder: Dockerfile
+Build command: empty
+Start command: bun server/api.ts
 ```
 
-Railway sets `PORT` automatically. No SQLite volume is needed for this proof.
+The repository includes:
+
+```txt
+Dockerfile
+railway.json
+```
+
+The Dockerfile pins:
+
+```txt
+node:22-bookworm-slim
+pnpm@10.18.3
+bun@1.2.5
+```
+
+Railway sets `PORT` automatically. `server/api.ts` reads it and starts Bun on that port. No SQLite volume is needed for this proof.
 
 Important limitation: in-memory sessions disappear when the service restarts. That is acceptable for proving the parent-app/session workflow, but not for production tagging.
 
@@ -189,8 +250,6 @@ After Railway deploys, test:
 https://your-railway-service.up.railway.app/api/health
 https://your-railway-service.up.railway.app/parent-demo
 ```
-
-To test from GitHub Pages instead, open the GH Pages `/parent-demo` route and use the same Railway URL in the `API URL` field.
 
 Later production deployment:
 
@@ -259,9 +318,9 @@ These buckets are useful for validation coverage, active learning, and model com
 
 ## Embedding The Tagger
 
-We want the core tagger to be reusable from a parent image manager/dashboard. There are two realistic integration styles.
+We want the core tagger to be reusable from a parent image manager/dashboard.
 
-### Recommended: iframe or new tab with `postMessage`
+### Recommended: session page in iframe or new tab
 
 This is the best default for mobile-first use.
 
@@ -275,49 +334,68 @@ Benefits:
 
 Use this when the parent app wants to call the tagger, pass in a photo, and get annotation data back.
 
-Parent opens:
+Parent creates a session:
+
+```http
+POST /api/sessions
+Content-Type: application/json
+
+{
+  "image": {
+    "id": "image_123",
+    "name": "pond-photo.jpg",
+    "url": "https://storage.example.com/originals/pond-photo.jpg",
+    "width": 1920,
+    "height": 1080
+  },
+  "metadata": {
+    "queueId": "needs-first-pass",
+    "userId": "annotator_1"
+  },
+  "webhookUrl": "https://parent.example.com/api/fishcross/webhook",
+  "options": {
+    "allowOneSidedFin": true,
+    "returnThumbnails": true
+  }
+}
+```
+
+API responds with:
+
+```json
+{
+  "session": {
+    "id": "session_..."
+  },
+  "taggerUrl": "/s/session_..."
+}
+```
+
+Parent opens or embeds:
 
 ```txt
-/tagger-session?sessionId=...&returnMode=postMessage
+https://fishcrosstag.up.railway.app/s/session_...?parentOrigin=https%3A%2F%2Fparent.example.com&closeOnComplete=true
 ```
 
-or embeds:
+For an iframe, use the same URL in `src`.
 
-```html
-<iframe src="/tagger-session?sessionId=abc" />
-```
+For a new tab, use `window.open(taggerUrl, "_blank")`. Do not use `noreferrer`; the tagger needs `window.opener` to send the browser message back and close the tab.
 
-Parent sends an init message:
+When the user clicks the green checkmark, the tagger:
+
+1. posts the result to `POST /api/sessions/:sessionId/complete`
+2. sends `fishcross-tagger:complete` to `window.parent` or `window.opener`
+3. attempts to close the tab if opened by the parent and `closeOnComplete` is not `false`
+4. sends the webhook server-to-server if the session has `webhookUrl`
+
+Browser message:
 
 ```ts
-iframe.contentWindow?.postMessage(
-  {
-    type: "koiTagger:init",
-    sessionId: "abc",
-    image: {
-      id: "image_123",
-      name: "pond-photo.jpg",
-      url: "https://storage.example.com/originals/pond-photo.jpg",
-      width: 1920,
-      height: 1080
-    },
-    options: {
-      requireFinLine: false,
-      allowOneSidedFin: true,
-      returnThumbnails: true
-    }
-  },
-  "https://tagger.example.com"
-);
-```
-
-Tagger responds:
-
-```ts
-window.parent.postMessage(
-  {
-    type: "koiTagger:complete",
-    sessionId: "abc",
+{
+  type: "fishcross-tagger:complete",
+  sessionId: "session_...",
+  payload: {
+    sessionId: "session_...",
     imageId: "image_123",
     annotations: [
       {
@@ -332,34 +410,30 @@ window.parent.postMessage(
           { x: 0.3, y: 0.8 },
           { x: 0.1, y: 0.8 }
         ],
-        buckets: ["has_fin_line", "one_sided_fin", "bent_body"]
+        buckets: ["has_fin_line", "one_sided_fin", "bent_body"],
+        preview: {
+          mimeType: "image/jpeg",
+          dataUrl: "data:image/jpeg;base64,...",
+          width: 120,
+          height: 360
+        }
       }
     ],
-    thumbnails: [
-      {
-        fishId: "fish_1",
-        mimeType: "image/jpeg",
-        dataUrl: "data:image/jpeg;base64,..."
-      }
-    ]
-  },
-  "https://dashboard.example.com"
-);
+    metadata: {},
+    completedAt: "..."
+  }
+}
 ```
 
 Use strict origin checks on both sides. Never accept messages from `*` in production.
 
-Suggested message types:
+Current message type:
 
 ```txt
-koiTagger:init
-koiTagger:saveDraft
-koiTagger:complete
-koiTagger:cancel
-koiTagger:error
+fishcross-tagger:complete
 ```
 
-Draft saves can let the dashboard persist progress while a user works through a queue.
+The API also supports SSE on `/api/sessions/:sessionId/events` and polling through `GET /api/sessions/:sessionId`. These are mainly for browser-only demos and fallback behavior. A production parent backend should prefer the webhook.
 
 ### Alternative: React component import
 
@@ -381,50 +455,30 @@ Costs:
 
 Use this only if the dashboard becomes the only host app and we no longer need the tagger as a standalone tool.
 
-## Recommended Integration Decision
-
-Build the tagger core as a session-based embeddable page first.
-
-The parent app should create a tagging session, open the tagger in a full-screen iframe or new tab, and receive results through `postMessage` and/or API persistence.
-
-For mobile, full-screen iframe/new-tab is likely better than component embedding because the tagger owns the entire gesture surface.
-
-## Tagger Session API Shape
-
-Future endpoints:
+## Tagger Session API
 
 ```txt
-POST /api/tagger-sessions
-GET  /api/tagger-sessions/:id
-POST /api/tagger-sessions/:id/draft
-POST /api/tagger-sessions/:id/complete
+GET  /api/health
+POST /api/sessions
+GET  /api/sessions/:sessionId
+GET  /api/sessions/:sessionId/events
+POST /api/sessions/:sessionId/draft
+POST /api/sessions/:sessionId/complete
 ```
 
-Session record should contain:
+The current session store is memory-only. Sessions survive while the Railway process is awake. They disappear on restart or sleep.
 
-```json
-{
-  "id": "session_abc",
-  "imageId": "image_123",
-  "imageUrl": "https://...",
-  "status": "open",
-  "returnMode": "postMessage",
-  "parentOrigin": "https://dashboard.example.com",
-  "annotationJson": null,
-  "createdAt": "...",
-  "updatedAt": "..."
-}
-```
+That is acceptable for the proof. Persistent storage should be added before production use.
 
 ## Near-Term Implementation Steps
 
-1. Make `/dashboard` fetch live `/api/dashboard` data.
-2. Add `tagger-sessions` table and API endpoints.
-3. Add `/tagger-session` route that loads one session.
-4. Add `postMessage` init/complete/cancel contract.
-5. Move annotation result serialization into shared code.
-6. Add upload pipeline and object storage adapter.
-7. Add dataset export job.
-8. Add training-run orchestration.
+1. Add persistent session storage, likely SQLite on a Railway volume first.
+2. Add webhook signing, retry records, and a resend endpoint.
+3. Add caller identity so sessions can be tied to a parent app/user/queue.
+4. Add upload pipeline and object storage adapter for originals and exports.
+5. Move large previews/exports out of JSON payloads and into object storage URLs.
+6. Make `/dashboard` fetch live queue/session/training data.
+7. Add dataset export jobs for YOLO training.
+8. Add training-run orchestration for RunPod/Vast workers.
 
-Keep the current GitHub Pages tagger stable on `main`. Build dashboard/API/session orchestration on `tanstack-dashboard`.
+Keep the current GitHub Pages tagger stable on `main`. Build Railway session orchestration on `railway-session-service`.
