@@ -442,6 +442,34 @@ function verticalLineRotation(points: Point[], image?: ImageInfo) {
   return 90 - angle;
 }
 
+function headWeightedLineRotation(points: Point[], image?: ImageInfo) {
+  if (points.length < 3) return verticalLineRotation(points, image);
+
+  let weightedX = 0;
+  let weightedY = 0;
+  let totalWeight = 0;
+  const lastSegmentIndex = Math.max(1, points.length - 2);
+
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    const dx = image ? (previous.x - current.x) * image.width : previous.x - current.x;
+    const dy = image ? (previous.y - current.y) * image.height : previous.y - current.y;
+    const length = Math.hypot(dx, dy);
+    if (length <= 0.000001) continue;
+
+    const headBias = 1 - (index - 1) / lastSegmentIndex;
+    const weight = length * (0.25 + headBias * headBias * 1.75);
+    weightedX += (dx / length) * weight;
+    weightedY += (dy / length) * weight;
+    totalWeight += weight;
+  }
+
+  if (totalWeight <= 0) return verticalLineRotation(points, image);
+  const angle = (Math.atan2(weightedY, weightedX) * 180) / Math.PI;
+  return 90 - angle;
+}
+
 function bboxStyle(box: Box) {
   return {
     left: `${box.x * 100}%`,
@@ -489,7 +517,7 @@ function polygonPoints(points: Point[]) {
 }
 
 function baseCorrectionRotation(tag: KoiTag, image: ImageInfo) {
-  return verticalLineRotation(tag.bodyLine, image);
+  return headWeightedLineRotation(tag.bodyLine, image);
 }
 
 function manualRotationDelta(tag: KoiTag) {
