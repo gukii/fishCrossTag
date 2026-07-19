@@ -206,6 +206,9 @@ Webhook payload:
         "bodyLine": [],
         "finLine": [],
         "correctedBox": {},
+        "cropBox": {},
+        "rotationDeg": 0,
+        "rotationPivot": { "x": 0.5, "y": 0.5 },
         "correctedPolygon": [],
         "buckets": [],
         "preview": {
@@ -494,6 +497,9 @@ Browser message:
         finLine: [{ x: 0.18, y: 0.55 }, { x: 0.32, y: 0.56 }],
         finMode: "one-sided-visible",
         correctedBox: { x: 0.1, y: 0.2, width: 0.2, height: 0.6 },
+        cropBox: { x: 0.1, y: 0.2, width: 0.2, height: 0.6 },
+        rotationDeg: 12.5,
+        rotationPivot: { x: 0.2, y: 0.5 },
         correctedPolygon: [
           { x: 0.1, y: 0.2 },
           { x: 0.3, y: 0.2 },

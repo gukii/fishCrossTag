@@ -58,6 +58,7 @@ type KoiTag = {
   correctedBBox?: Box;
   correctedBBoxEdited?: boolean;
   correctionRotationDeg?: number;
+  correctionCropRotationDeg?: number;
   correctedPoints?: Point[];
   status: "active" | "done";
   createdAt: string;
@@ -335,7 +336,7 @@ function orderedBoxCorners(box: Box): Point[] {
 }
 
 function correctionCenter(tag: KoiTag): Point {
-  return tag.bodyLine[0];
+  return boxCenter(tag.bbox);
 }
 
 function boxFromPointsWithMargin(points: Point[], marginX: number, marginY: number): Box {
@@ -490,6 +491,10 @@ function polygonPoints(points: Point[]) {
 
 function correctionRotation(tag: KoiTag, image: ImageInfo) {
   return tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image);
+}
+
+function cropRotation(tag: KoiTag, rotation: number) {
+  return tag.correctionCropRotationDeg ?? rotation;
 }
 
 function bodyLengthPx(tag: KoiTag, image: ImageInfo) {
@@ -694,7 +699,8 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
 
       const angle = pointerAngle(point, drag.center, image ?? undefined);
       updateTagCorrection(drag.tagId, {
-        correctionRotationDeg: drag.startRotation + angle - drag.startAngle,
+        correctionRotationDeg: drag.startRotation - (angle - drag.startAngle),
+        correctionCropRotationDeg: drag.startRotation + angle - drag.startAngle,
       });
     }
 
@@ -930,7 +936,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     context.fillRect(0, 0, cropWidthPx, cropHeightPx);
     context.translate(-cropX, -cropY);
     context.translate(centerX, centerY);
-    context.rotate((rotation * Math.PI) / 180);
+    context.rotate((cropRotation(tag, rotation) * Math.PI) / 180);
     context.translate(-centerX, -centerY);
     context.drawImage(photo, 0, 0, image!.width, image!.height);
   }
@@ -1005,6 +1011,9 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       finLine: tag.finLine,
       finMode: deriveFinMode({ bodyLine: tag.bodyLine, finLine: tag.finLine }),
       correctedBox: geometry.correctedBox,
+      cropBox: geometry.correctedBox,
+      rotationDeg: cropRotation(tag, geometry.rotation),
+      rotationPivot: correctionCenter(tag),
       correctedPolygon: orientedCorrectedBoxPoints(tag, image),
       imageWidth: image.width,
       imageHeight: image.height,
@@ -1379,6 +1388,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
             correctedBBoxEdited: false,
             correctedPoints: undefined,
             correctionRotationDeg: undefined,
+            correctionCropRotationDeg: undefined,
             lastPaintedAt: paintedAt,
           };
         }),
@@ -1402,6 +1412,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 correctedBBoxEdited: false,
                 correctedPoints: undefined,
                 correctionRotationDeg: undefined,
+                correctionCropRotationDeg: undefined,
                 lastPaintedAt: paintedAt,
               }
             : tag,
@@ -1457,6 +1468,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 correctedBBoxEdited: false,
                 correctedPoints: undefined,
                 correctionRotationDeg: image ? verticalLineRotation(tag.bodyLine, image) : undefined,
+                correctionCropRotationDeg: undefined,
                 lastPaintedAt: now.toISOString(),
               }
             : tag,
@@ -1507,11 +1519,15 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     if (!point || !tag || !image) return;
     const center = correctionCenter(tag);
     const startRotation = tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image);
+    const startBox = sourceCorrectedBox(tag, image, startRotation);
     setActiveTagId(tagId);
     setEditingTagId(tagId);
     setShowOriginalTagId(null);
     updateTagCorrection(tagId, {
+      correctedBBox: startBox,
+      correctedBBoxEdited: true,
       correctionRotationDeg: startRotation,
+      correctionCropRotationDeg: tag.correctionCropRotationDeg ?? startRotation,
     });
     setDrag({
       type: "rotate",
@@ -1568,6 +1584,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
               correctedBBoxEdited: false,
               correctedPoints: undefined,
               correctionRotationDeg: undefined,
+              correctionCropRotationDeg: undefined,
             }
           : tag,
       ),
@@ -1591,7 +1608,10 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     }
   }
 
-  function updateTagCorrection(tagId: string, patch: Partial<Pick<KoiTag, "correctedBBox" | "correctionRotationDeg" | "correctedPoints">>) {
+  function updateTagCorrection(
+    tagId: string,
+    patch: Partial<Pick<KoiTag, "correctedBBox" | "correctedBBoxEdited" | "correctionRotationDeg" | "correctionCropRotationDeg" | "correctedPoints">>,
+  ) {
     setTags((current) =>
       current.map((tag) => (tag.id === tagId ? { ...tag, ...patch } : tag)),
     );
@@ -2135,7 +2155,7 @@ function RotatedCropCanvas({
       context.clearRect(0, 0, cropWidthPx, cropHeightPx);
       context.translate(-cropX, -cropY);
       context.translate(centerX, centerY);
-      context.rotate((rotation * Math.PI) / 180);
+      context.rotate((cropRotation(tag, rotation) * Math.PI) / 180);
       context.translate(-centerX, -centerY);
       context.drawImage(photo, 0, 0, image.width, image.height);
       if (applyVignette) {

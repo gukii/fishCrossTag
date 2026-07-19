@@ -30,6 +30,9 @@ export type FishAnnotationPayload = {
   finMode?: FinMode;
   correctedPolygon?: WorkflowPoint[];
   correctedBox?: WorkflowBox;
+  cropBox?: WorkflowBox;
+  rotationDeg?: number;
+  rotationPivot?: WorkflowPoint;
   imageWidth: number;
   imageHeight: number;
 };
