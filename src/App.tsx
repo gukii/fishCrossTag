@@ -55,10 +55,9 @@ type KoiTag = {
   bodyLine: Point[];
   finLine?: Point[];
   bbox: Box;
-  correctedBBox?: Box;
-  correctedBBoxEdited?: boolean;
-  correctionRotationDeg?: number;
-  correctionCropRotationDeg?: number;
+  polygonBox?: Box;
+  polygonBoxEdited?: boolean;
+  manualRotationDeltaDeg?: number;
   correctedPoints?: Point[];
   status: "active" | "done";
   createdAt: string;
@@ -489,12 +488,20 @@ function polygonPoints(points: Point[]) {
   return points.map((point) => `${point.x * 1000},${point.y * 1000}`).join(" ");
 }
 
-function correctionRotation(tag: KoiTag, image: ImageInfo) {
-  return tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image);
+function baseCorrectionRotation(tag: KoiTag, image: ImageInfo) {
+  return verticalLineRotation(tag.bodyLine, image);
 }
 
-function cropRotation(tag: KoiTag, rotation: number) {
-  return tag.correctionCropRotationDeg ?? rotation;
+function manualRotationDelta(tag: KoiTag) {
+  return tag.manualRotationDeltaDeg ?? 0;
+}
+
+function frameCorrectionRotation(tag: KoiTag, image: ImageInfo) {
+  return baseCorrectionRotation(tag, image) - manualRotationDelta(tag);
+}
+
+function cropCorrectionRotation(tag: KoiTag, image: ImageInfo) {
+  return baseCorrectionRotation(tag, image) + manualRotationDelta(tag);
 }
 
 function bodyLengthPx(tag: KoiTag, image: ImageInfo) {
@@ -503,14 +510,14 @@ function bodyLengthPx(tag: KoiTag, image: ImageInfo) {
   return Math.max(40, Math.hypot((head.x - tail.x) * image.width, (head.y - tail.y) * image.height));
 }
 
-function rotatedAnnotationPoints(tag: KoiTag, image: ImageInfo, rotation = correctionRotation(tag, image)) {
+function rotatedAnnotationPoints(tag: KoiTag, image: ImageInfo, rotation = frameCorrectionRotation(tag, image)) {
   const center = correctionCenter(tag);
   const sourcePoints = tag.finLine ? [...tag.bodyLine, ...tag.finLine] : tag.bodyLine;
   return sourcePoints.map((point) => rotateImagePoint(point, center, rotation, image));
 }
 
-function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = correctionRotation(tag, image)) {
-  if (tag.correctedBBoxEdited && tag.correctedBBox) return tag.correctedBBox;
+function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = frameCorrectionRotation(tag, image)) {
+  if (tag.polygonBoxEdited && tag.polygonBox) return tag.polygonBox;
 
   const rotatedPoints = rotatedAnnotationPoints(tag, image, rotation);
   const fallbackMarginPx = tag.finLine ? 1 : bodyLengthPx(tag, image) * 0.04;
@@ -525,7 +532,7 @@ function displayCrop(tag: KoiTag, image: ImageInfo, correctedBox: Box, settings:
 }
 
 function orientedCorrectedBoxPoints(tag: KoiTag, image: ImageInfo) {
-  const rotation = correctionRotation(tag, image);
+  const rotation = frameCorrectionRotation(tag, image);
   const center = correctionCenter(tag);
   return orderedBoxCorners(sourceCorrectedBox(tag, image, rotation)).map((point) => rotateImagePoint(point, center, -rotation, image));
 }
@@ -544,8 +551,8 @@ function controlPosition(box: Box, viewScale = 1) {
 }
 
 function correctedGeometry(tag: KoiTag, image: ImageInfo): CorrectedGeometry {
-  const rotation = correctionRotation(tag, image);
-  const correctedBox = sourceCorrectedBox(tag, image, rotation);
+  const rotation = cropCorrectionRotation(tag, image);
+  const correctedBox = sourceCorrectedBox(tag, image, frameCorrectionRotation(tag, image));
 
   return {
     rotation,
@@ -606,7 +613,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   const editingTag = tags.find((tag) => tag.id === editingTagId) ?? null;
   const activeStroke = drag?.type === "stroke" ? drag.points : [];
   const activeDisplayBox = editingTag?.bbox;
-  const activeOrientedPoints = editingTag && image && editingTag.correctionRotationDeg != null ? orientedCorrectedBoxPoints(editingTag, image) : null;
+  const activeOrientedPoints = editingTag && image ? orientedCorrectedBoxPoints(editingTag, image) : null;
   const imageFrame = image ? coverImageFrame(image, stageSize) : null;
 
   useEffect(() => {
@@ -699,8 +706,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
 
       const angle = pointerAngle(point, drag.center, image ?? undefined);
       updateTagCorrection(drag.tagId, {
-        correctionRotationDeg: drag.startRotation - (angle - drag.startAngle),
-        correctionCropRotationDeg: drag.startRotation + angle - drag.startAngle,
+        manualRotationDeltaDeg: drag.startRotation + angle - drag.startAngle,
       });
     }
 
@@ -936,7 +942,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     context.fillRect(0, 0, cropWidthPx, cropHeightPx);
     context.translate(-cropX, -cropY);
     context.translate(centerX, centerY);
-    context.rotate((cropRotation(tag, rotation) * Math.PI) / 180);
+    context.rotate((rotation * Math.PI) / 180);
     context.translate(-centerX, -centerY);
     context.drawImage(photo, 0, 0, image!.width, image!.height);
   }
@@ -1012,7 +1018,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       finMode: deriveFinMode({ bodyLine: tag.bodyLine, finLine: tag.finLine }),
       correctedBox: geometry.correctedBox,
       cropBox: geometry.correctedBox,
-      rotationDeg: cropRotation(tag, geometry.rotation),
+      rotationDeg: geometry.rotation,
       rotationPivot: correctionCenter(tag),
       correctedPolygon: orientedCorrectedBoxPoints(tag, image),
       imageWidth: image.width,
@@ -1125,7 +1131,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const availableHeight = Math.max(80, visibleHeight - screenPadding * 2);
     const focusedTag: KoiTag = {
       ...tag,
-      correctionRotationDeg: tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image),
+      manualRotationDeltaDeg: tag.manualRotationDeltaDeg ?? 0,
     };
     const focusBox = boxFromPointsWithMargin(orientedCorrectedBoxPoints(focusedTag, image), 0, 0);
     const targetScale = Math.min(
@@ -1312,10 +1318,10 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     setTags((current) =>
       current.map((tag) => {
         if (tag.id !== activeDrag.tagId) return tag;
-        const targetKey: "bbox" | "correctedBBox" = tag.correctionRotationDeg == null ? "bbox" : "correctedBBox";
-        const correctedEditPatch = targetKey === "correctedBBox" ? { correctedBBoxEdited: true } : {};
-        const normalizeTargetBox = targetKey === "correctedBBox" ? normalizeFreeBox : normalizeBox;
-        const dragPoint = targetKey === "correctedBBox" && image ? rotateImagePoint(point, correctionCenter(tag), correctionRotation(tag, image), image) : point;
+        const targetKey: "bbox" | "polygonBox" = tag.id === editingTagId && image ? "polygonBox" : "bbox";
+        const correctedEditPatch = targetKey === "polygonBox" ? { polygonBoxEdited: true } : {};
+        const normalizeTargetBox = targetKey === "polygonBox" ? normalizeFreeBox : normalizeBox;
+        const dragPoint = targetKey === "polygonBox" && image ? rotateImagePoint(point, correctionCenter(tag), frameCorrectionRotation(tag, image), image) : point;
 
         if (activeDrag.handle === "move") {
           return {
@@ -1384,11 +1390,10 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
             ...tag,
             bodyLine: stroke,
             bbox: boxFromPoints(points),
-            correctedBBox: undefined,
-            correctedBBoxEdited: false,
+            polygonBox: undefined,
+            polygonBoxEdited: false,
             correctedPoints: undefined,
-            correctionRotationDeg: undefined,
-            correctionCropRotationDeg: undefined,
+            manualRotationDeltaDeg: undefined,
             lastPaintedAt: paintedAt,
           };
         }),
@@ -1408,11 +1413,10 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 ...tag,
                 finLine: stroke,
                 bbox: expandBoxToPoints(tag.bbox, stroke),
-                correctedBBox: undefined,
-                correctedBBoxEdited: false,
+                polygonBox: undefined,
+                polygonBoxEdited: false,
                 correctedPoints: undefined,
-                correctionRotationDeg: undefined,
-                correctionCropRotationDeg: undefined,
+                manualRotationDeltaDeg: undefined,
                 lastPaintedAt: paintedAt,
               }
             : tag,
@@ -1464,11 +1468,10 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 finLine: stroke,
                 bbox: expandBoxToPoints(tag.bbox, stroke),
                 status: "done",
-                correctedBBox: undefined,
-                correctedBBoxEdited: false,
+                polygonBox: undefined,
+                polygonBoxEdited: false,
                 correctedPoints: undefined,
-                correctionRotationDeg: image ? verticalLineRotation(tag.bodyLine, image) : undefined,
-                correctionCropRotationDeg: undefined,
+                manualRotationDeltaDeg: undefined,
                 lastPaintedAt: now.toISOString(),
               }
             : tag,
@@ -1503,8 +1506,9 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const point = pointFromPointer(event, { clampToImage: false });
     const tag = tags.find((current) => current.id === tagId);
     if (!point || !tag) return;
-    const startBox = tag.correctionRotationDeg == null || !image ? tag.bbox : correctedGeometry(tag, image).correctedBox;
-    const startPoint = tag.correctionRotationDeg == null || !image ? point : rotateImagePoint(point, correctionCenter(tag), correctionRotation(tag, image), image);
+    const isPolygonEdit = tag.id === editingTagId && image;
+    const startBox = isPolygonEdit ? correctedGeometry(tag, image).correctedBox : tag.bbox;
+    const startPoint = isPolygonEdit ? rotateImagePoint(point, correctionCenter(tag), frameCorrectionRotation(tag, image), image) : point;
     setActiveTagId(tagId);
     setEditingTagId(tagId);
     setShowOriginalTagId(null);
@@ -1517,17 +1521,17 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const point = pointFromPointer(event, { clampToImage: false });
     const tag = tags.find((current) => current.id === tagId);
     if (!point || !tag || !image) return;
-    const center = correctionCenter(tag);
-    const startRotation = tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image);
-    const startBox = sourceCorrectedBox(tag, image, startRotation);
+    const currentPolygon = orientedCorrectedBoxPoints(tag, image);
+    const center = polygonCenter(currentPolygon);
+    const startRotation = manualRotationDelta(tag);
+    const startBox = sourceCorrectedBox(tag, image, frameCorrectionRotation(tag, image));
     setActiveTagId(tagId);
     setEditingTagId(tagId);
     setShowOriginalTagId(null);
     updateTagCorrection(tagId, {
-      correctedBBox: startBox,
-      correctedBBoxEdited: true,
-      correctionRotationDeg: startRotation,
-      correctionCropRotationDeg: tag.correctionCropRotationDeg ?? startRotation,
+      polygonBox: startBox,
+      polygonBoxEdited: true,
+      manualRotationDeltaDeg: startRotation,
     });
     setDrag({
       type: "rotate",
@@ -1546,8 +1550,9 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const point = pointFromPointer(event, { clampToImage: false });
     const tag = tags.find((current) => current.id === tagId);
     if (!point || !tag) return;
-    const startBox = tag.correctionRotationDeg == null || !image ? tag.bbox : correctedGeometry(tag, image).correctedBox;
-    const startPoint = tag.correctionRotationDeg == null || !image ? point : rotateImagePoint(point, correctionCenter(tag), correctionRotation(tag, image), image);
+    const isPolygonEdit = tag.id === editingTagId && image;
+    const startBox = isPolygonEdit ? correctedGeometry(tag, image).correctedBox : tag.bbox;
+    const startPoint = isPolygonEdit ? rotateImagePoint(point, correctionCenter(tag), frameCorrectionRotation(tag, image), image) : point;
     setShowOriginalTagId(null);
     setDrag({ type: "bbox", pointerId: event.pointerId, tagId, handle: "move", startBox, startPoint });
   }
@@ -1580,11 +1585,10 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
               finLine: undefined,
               bbox: boxFromPoints(tag.bodyLine),
               status: "active",
-              correctedBBox: undefined,
-              correctedBBoxEdited: false,
+              polygonBox: undefined,
+              polygonBoxEdited: false,
               correctedPoints: undefined,
-              correctionRotationDeg: undefined,
-              correctionCropRotationDeg: undefined,
+              manualRotationDeltaDeg: undefined,
             }
           : tag,
       ),
@@ -1610,7 +1614,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
 
   function updateTagCorrection(
     tagId: string,
-    patch: Partial<Pick<KoiTag, "correctedBBox" | "correctedBBoxEdited" | "correctionRotationDeg" | "correctionCropRotationDeg" | "correctedPoints">>,
+    patch: Partial<Pick<KoiTag, "polygonBox" | "polygonBoxEdited" | "manualRotationDeltaDeg" | "correctedPoints">>,
   ) {
     setTags((current) =>
       current.map((tag) => (tag.id === tagId ? { ...tag, ...patch } : tag)),
@@ -1633,7 +1637,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         return {
           ...tag,
           status: "active",
-          correctionRotationDeg: image ? (tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image)) : tag.correctionRotationDeg,
+          manualRotationDeltaDeg: tag.manualRotationDeltaDeg ?? 0,
         };
       }),
     );
@@ -1658,13 +1662,13 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     setTags((current) =>
       current.map((currentTag) => {
         if (currentTag.id !== tagId) return currentTag;
-        if (!image || tag?.correctionRotationDeg != null) {
+        if (!image || tag?.manualRotationDeltaDeg != null || tag?.polygonBox != null) {
           return { ...currentTag, status: "active" };
         }
         return {
           ...currentTag,
           status: "active",
-          correctionRotationDeg: verticalLineRotation(currentTag.bodyLine, image),
+          manualRotationDeltaDeg: 0,
         };
       }),
     );
@@ -1709,7 +1713,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                     <g key={tag.id} className={tag.id === activeTagId ? "selected" : ""}>
                       <path d={pathFromPoints(tag.bodyLine)} className="body-line" />
                       {tag.finLine && <path d={pathFromPoints(tag.finLine)} className="fin-line" />}
-                      {image && tag.id === editingTagId && tag.correctionRotationDeg != null && (
+                      {image && tag.id === editingTagId && (
                         <polygon className="oriented-bbox" points={polygonPoints(orientedCorrectedBoxPoints(tag, image))} />
                       )}
                       {tag.id !== editingTagId && (
@@ -2155,7 +2159,7 @@ function RotatedCropCanvas({
       context.clearRect(0, 0, cropWidthPx, cropHeightPx);
       context.translate(-cropX, -cropY);
       context.translate(centerX, centerY);
-      context.rotate((cropRotation(tag, rotation) * Math.PI) / 180);
+      context.rotate((rotation * Math.PI) / 180);
       context.translate(-centerX, -centerY);
       context.drawImage(photo, 0, 0, image.width, image.height);
       if (applyVignette) {
