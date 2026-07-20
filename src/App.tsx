@@ -778,7 +778,7 @@ function correctedGeometry(tag: KoiTag, image: ImageInfo): CorrectedGeometry {
   };
 }
 
-function coverImageFrame(image: ImageInfo, stage: PixelRect): PixelRect {
+function containImageFrame(image: ImageInfo, stage: PixelRect): PixelRect {
   if (stage.width <= 0 || stage.height <= 0) {
     return { x: 0, y: 0, width: 1, height: 1 };
   }
@@ -787,8 +787,8 @@ function coverImageFrame(image: ImageInfo, stage: PixelRect): PixelRect {
   const stageAspect = stage.width / stage.height;
   const frame =
     imageAspect > stageAspect
-      ? { width: stage.height * imageAspect, height: stage.height }
-      : { width: stage.width, height: stage.width / imageAspect };
+      ? { width: stage.width, height: stage.width / imageAspect }
+      : { width: stage.height * imageAspect, height: stage.height };
 
   return {
     x: (stage.width - frame.width) / 2,
@@ -799,6 +799,7 @@ function coverImageFrame(image: ImageInfo, stage: PixelRect): PixelRect {
 }
 
 export default function App({ initialImage, sessionId, sessionMode = false, metadata, onSessionComplete, persistLocalSettings = true }: AppProps = {}) {
+  const embedMode = metadata?.mode === "embed";
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageTransformRef = useRef<HTMLDivElement | null>(null);
   const sourceImageRef = useRef<HTMLImageElement | null>(null);
@@ -843,7 +844,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     activeLineEndpointTarget.endpoint === "start"
       ? activeLineEndpointTarget
       : null;
-  const imageFrame = image ? coverImageFrame(image, stageSize) : null;
+  const imageFrame = image ? containImageFrame(image, stageSize) : null;
 
   useEffect(() => {
     viewRef.current = view;
@@ -886,6 +887,16 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   useEffect(() => {
     if (initialImage) {
       setImage(initialImage);
+      setTags([]);
+      setActiveTagId(null);
+      setEditingTagId(null);
+      setLineEditingTagId(null);
+      setLineEndpointSelection(null);
+      setDrag(null);
+      setDrawerOpen(true);
+      setEditTarget("auto");
+      setFinDeleteTagId(null);
+      setView({ scale: 1, x: 0, y: 0 });
       return;
     }
     const probe = new Image();
@@ -2062,9 +2073,11 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
 
   return (
     <main className="app-shell">
-      <button className="hmr-clock" type="button" onClick={copyHotReloadTime} aria-label="Copy last hot reload time">
-        {hotReloadCopied ? "Copied" : `HMR ${hotReloadTime}`}
-      </button>
+      {!embedMode && (
+        <button className="hmr-clock" type="button" onClick={copyHotReloadTime} aria-label="Copy last hot reload time">
+          {hotReloadCopied ? "Copied" : `HMR ${hotReloadTime}`}
+        </button>
+      )}
       <section className="workspace" aria-label="Koi tagging workspace">
         <div className="stage-wrap">
           {image ? (
@@ -2275,14 +2288,18 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
               </div>
 
               <div className="floating-controls" data-no-draw onPointerDown={(event) => event.stopPropagation()}>
-                <label className="source-action-button floating-mode-button" aria-label="Open photo from album">
-                  <input type="file" accept="image/*" onChange={loadImage} />
-                  <ImagePlus size={19} />
-                </label>
-                <label className="source-action-button floating-mode-button" aria-label="Take photo with camera">
-                  <input type="file" accept="image/*" capture="environment" onChange={loadImage} />
-                  <Camera size={19} />
-                </label>
+                {!embedMode && (
+                  <>
+                    <label className="source-action-button floating-mode-button" aria-label="Open photo from album">
+                      <input type="file" accept="image/*" onChange={loadImage} />
+                      <ImagePlus size={19} />
+                    </label>
+                    <label className="source-action-button floating-mode-button" aria-label="Take photo with camera">
+                      <input type="file" accept="image/*" capture="environment" onChange={loadImage} />
+                      <Camera size={19} />
+                    </label>
+                  </>
+                )}
 
                 <Button
                   className="floating-mode-button mode-toggle-button"
@@ -2344,42 +2361,46 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                   <RotateCcw size={18} />
                 </Button>
 
-                <Button
-                  className="floating-mode-button"
-                  size="icon"
-                  variant={drawerOpen ? "default" : "secondary"}
-                  disabled={!tags.length}
-                  onClick={() => {
-                    setDrawerOpen((open) => {
-                      const nextOpen = !open;
-                      if (nextOpen) {
-                        setSettingsOpen(false);
-                      }
-                      return nextOpen;
-                    });
-                  }}
-                  aria-label={drawerOpen ? "Hide tagged fish drawer" : "Show tagged fish drawer"}
-                >
-                  {drawerOpen ? <PanelBottomClose size={18} /> : <PanelBottomOpen size={18} />}
-                </Button>
+                {!embedMode && (
+                  <>
+                    <Button
+                      className="floating-mode-button"
+                      size="icon"
+                      variant={drawerOpen ? "default" : "secondary"}
+                      disabled={!tags.length}
+                      onClick={() => {
+                        setDrawerOpen((open) => {
+                          const nextOpen = !open;
+                          if (nextOpen) {
+                            setSettingsOpen(false);
+                          }
+                          return nextOpen;
+                        });
+                      }}
+                      aria-label={drawerOpen ? "Hide tagged fish drawer" : "Show tagged fish drawer"}
+                    >
+                      {drawerOpen ? <PanelBottomClose size={18} /> : <PanelBottomOpen size={18} />}
+                    </Button>
 
-                <Button
-                  className="floating-mode-button"
-                  size="icon"
-                  variant={settingsOpen ? "default" : "secondary"}
-                  onClick={() => {
-                    setSettingsOpen((open) => {
-                      const nextOpen = !open;
-                      if (nextOpen) {
-                        setDrawerOpen(false);
-                      }
-                      return nextOpen;
-                    });
-                  }}
-                  aria-label={settingsOpen ? "Hide settings" : "Show settings"}
-                >
-                  <Settings size={18} />
-                </Button>
+                    <Button
+                      className="floating-mode-button"
+                      size="icon"
+                      variant={settingsOpen ? "default" : "secondary"}
+                      onClick={() => {
+                        setSettingsOpen((open) => {
+                          const nextOpen = !open;
+                          if (nextOpen) {
+                            setDrawerOpen(false);
+                          }
+                          return nextOpen;
+                        });
+                      }}
+                      aria-label={settingsOpen ? "Hide settings" : "Show settings"}
+                    >
+                      <Settings size={18} />
+                    </Button>
+                  </>
+                )}
 
                 <Button
                   className="floating-mode-button session-complete-button"
@@ -2392,7 +2413,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 </Button>
               </div>
 
-              {settingsOpen && (
+              {!embedMode && settingsOpen && (
                 <>
                   <button
                     className="settings-dismiss"
@@ -2539,7 +2560,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         </div>
       </section>
 
-      {drawerOpen && image && tags.length > 0 && (
+      {!embedMode && drawerOpen && image && tags.length > 0 && (
         <CorrectedThumbDrawer
           image={image}
           tags={tags}
