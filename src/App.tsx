@@ -527,6 +527,36 @@ function simplifyStroke(points: Point[]) {
   return kept;
 }
 
+function smoothEditedEndpoint(points: Point[], endpoint: "start" | "end", point: Point) {
+  if (points.length < 3) {
+    const next = [...points];
+    next[endpoint === "start" ? 0 : next.length - 1] = point;
+    return next;
+  }
+
+  const next = [...points];
+  const endpointIndex = endpoint === "start" ? 0 : points.length - 1;
+  const original = points[endpointIndex];
+  const delta = {
+    x: point.x - original.x,
+    y: point.y - original.y,
+  };
+  const influenceCount = Math.max(3, Math.ceil(points.length * 0.78));
+
+  for (let offset = 0; offset < influenceCount; offset += 1) {
+    const index = endpoint === "start" ? offset : points.length - 1 - offset;
+    const amount = 1 - offset / Math.max(1, influenceCount - 1);
+    const weight = 0.18 + 0.82 * amount;
+    next[index] = clampPoint({
+      x: points[index].x + delta.x * weight,
+      y: points[index].y + delta.y * weight,
+    });
+  }
+
+  next[endpointIndex] = point;
+  return next;
+}
+
 function pathFromPoints(points: Point[]) {
   return points
     .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x * 1000} ${point.y * 1000}`)
@@ -1553,10 +1583,9 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         const finLine = tag.finLine ? [...tag.finLine] : undefined;
         const targetLine = activeDrag.line === "body" ? bodyLine : finLine;
         if (!targetLine?.length) return tag;
-        const endpointIndex = activeDrag.endpoint === "start" ? 0 : targetLine.length - 1;
-        targetLine[endpointIndex] = point;
-        const nextBodyLine = activeDrag.line === "body" ? targetLine : bodyLine;
-        const nextFinLine = activeDrag.line === "fin" ? targetLine : finLine;
+        const smoothedLine = smoothEditedEndpoint(targetLine, activeDrag.endpoint, point);
+        const nextBodyLine = activeDrag.line === "body" ? smoothedLine : bodyLine;
+        const nextFinLine = activeDrag.line === "fin" ? smoothedLine : finLine;
         const bboxPoints = nextFinLine ? [...nextBodyLine, ...nextFinLine] : nextBodyLine;
 
         return {
