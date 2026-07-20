@@ -320,6 +320,36 @@ h2 {
     0 3px 10px rgba(0, 0, 0, 0.4);
 }
 
+.line-endpoint-handle {
+  position: absolute;
+  z-index: 7;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: #ffd348;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 3px rgba(34, 48, 43, 0.24);
+  transform: translate(-50%, -50%) scale(var(--control-scale, 1));
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.line-endpoint-handle.fin-start,
+.line-endpoint-handle.fin-end {
+  background: #55e5ff;
+}
+
+.line-endpoint-handle.body-start {
+  box-shadow:
+    0 0 0 4px rgba(240, 76, 59, 0.58),
+    0 2px 8px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 3px rgba(34, 48, 43, 0.24);
+}
+
 .head-undo-button {
   position: absolute;
   z-index: 7;

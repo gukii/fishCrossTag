@@ -84,6 +84,7 @@ type DragState =
   | { type: "stroke"; pointerId: number; points: Point[]; source: "direct" | "crosshair" }
   | { type: "bbox"; pointerId: number; tagId: string; handle: Handle; startBox: Box; startPoint: Point }
   | { type: "rotate"; pointerId: number; tagId: string; startAngle: number; startRotation: number; center: Point }
+  | { type: "lineEndpoint"; pointerId: number; tagId: string; line: "body" | "fin"; endpoint: "start" | "end" }
   | { type: "finishTap"; pointerId: number; tagId: string; startPoint: Point; moved: boolean };
 
 type GestureState = {
@@ -871,13 +872,17 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   }, [image]);
 
   useEffect(() => {
-    if (!drag || (drag.type !== "bbox" && drag.type !== "rotate")) return;
+    if (!drag || (drag.type !== "bbox" && drag.type !== "rotate" && drag.type !== "lineEndpoint")) return;
 
     function move(event: globalThis.PointerEvent) {
       const point = pointFromClient(event.clientX, event.clientY, { clampToImage: false });
       if (!point) return;
       if (drag.type === "bbox") {
         updateBboxDrag(drag, point);
+        return;
+      }
+      if (drag.type === "lineEndpoint") {
+        updateLineEndpointDrag(drag, point);
         return;
       }
 
@@ -1483,6 +1488,11 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       return;
     }
 
+    if (drag.type === "lineEndpoint") {
+      updateLineEndpointDrag(drag, point);
+      return;
+    }
+
     if (drag.type === "stroke") {
       setDrag({ ...drag, points: [...drag.points, point] });
       return;
@@ -1491,6 +1501,35 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     if (drag.type === "bbox") {
       updateBboxDrag(drag, point);
     }
+  }
+
+  function updateLineEndpointDrag(activeDrag: Extract<DragState, { type: "lineEndpoint" }>, point: Point) {
+    setTags((current) =>
+      current.map((tag) => {
+        if (tag.id !== activeDrag.tagId) return tag;
+        const bodyLine = [...tag.bodyLine];
+        const finLine = tag.finLine ? [...tag.finLine] : undefined;
+        const targetLine = activeDrag.line === "body" ? bodyLine : finLine;
+        if (!targetLine?.length) return tag;
+        const endpointIndex = activeDrag.endpoint === "start" ? 0 : targetLine.length - 1;
+        targetLine[endpointIndex] = point;
+        const nextBodyLine = activeDrag.line === "body" ? targetLine : bodyLine;
+        const nextFinLine = activeDrag.line === "fin" ? targetLine : finLine;
+        const bboxPoints = nextFinLine ? [...nextBodyLine, ...nextFinLine] : nextBodyLine;
+
+        return {
+          ...tag,
+          bodyLine: nextBodyLine,
+          finLine: nextFinLine,
+          bbox: boxFromPoints(bboxPoints),
+          polygonBox: undefined,
+          polygonBoxEdited: false,
+          correctedPoints: undefined,
+          manualRotationDeltaDeg: undefined,
+          lastPaintedAt: new Date().toISOString(),
+        };
+      }),
+    );
   }
 
   function updateBboxDrag(activeDrag: Extract<DragState, { type: "bbox" }>, point: Point) {
@@ -1542,6 +1581,11 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     }
 
     if (drag.type === "bbox") {
+      setDrag(null);
+      return;
+    }
+
+    if (drag.type === "lineEndpoint") {
       setDrag(null);
       return;
     }
@@ -1734,6 +1778,16 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const startPoint = isPolygonEdit ? rotateImagePoint(point, correctionCenter(tag), frameCorrectionRotation(tag, image), image) : point;
     setShowOriginalTagId(null);
     setDrag({ type: "bbox", pointerId: event.pointerId, tagId, handle: "move", startBox, startPoint });
+  }
+
+  function beginLineEndpointDrag(event: PointerEvent<HTMLSpanElement>, tagId: string, line: "body" | "fin", endpoint: "start" | "end") {
+    if (mode === "move") return;
+    event.stopPropagation();
+    setActiveTagId(tagId);
+    setEditingTagId(tagId);
+    setShowOriginalTagId(null);
+    setFinDeleteTagId(null);
+    setDrag({ type: "lineEndpoint", pointerId: event.pointerId, tagId, line, endpoint });
   }
 
   function finishTag() {
@@ -1947,6 +2001,43 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                         />
                       );
                     })}
+                  </>
+                )}
+
+                {editingTag && (
+                  <>
+                    <span
+                      className="line-endpoint-handle body-start"
+                      style={pointHandleStyle(editingTag.bodyLine[0], view.scale)}
+                      data-no-draw
+                      aria-label="Move fish head"
+                      onPointerDown={(event) => beginLineEndpointDrag(event, editingTag.id, "body", "start")}
+                    />
+                    <span
+                      className="line-endpoint-handle body-end"
+                      style={pointHandleStyle(editingTag.bodyLine[editingTag.bodyLine.length - 1], view.scale)}
+                      data-no-draw
+                      aria-label="Move fish tail"
+                      onPointerDown={(event) => beginLineEndpointDrag(event, editingTag.id, "body", "end")}
+                    />
+                    {editingTag.finLine && (
+                      <>
+                        <span
+                          className="line-endpoint-handle fin-start"
+                          style={pointHandleStyle(editingTag.finLine[0], view.scale)}
+                          data-no-draw
+                          aria-label="Move fin line start"
+                          onPointerDown={(event) => beginLineEndpointDrag(event, editingTag.id, "fin", "start")}
+                        />
+                        <span
+                          className="line-endpoint-handle fin-end"
+                          style={pointHandleStyle(editingTag.finLine[editingTag.finLine.length - 1], view.scale)}
+                          data-no-draw
+                          aria-label="Move fin line end"
+                          onPointerDown={(event) => beginLineEndpointDrag(event, editingTag.id, "fin", "end")}
+                        />
+                      </>
+                    )}
                   </>
                 )}
 
