@@ -350,6 +350,87 @@ h2 {
     inset 0 0 0 3px rgba(34, 48, 43, 0.24);
 }
 
+.line-edit-loupe {
+  position: absolute;
+  z-index: 11;
+  width: var(--loupe-size, 132px);
+  height: var(--loupe-size, 132px);
+  overflow: visible;
+  transform: var(--loupe-transform, translate(-50%, -100%)) scale(var(--loupe-scale, 1));
+  transform-origin: 50% 100%;
+  pointer-events: none;
+}
+
+.line-edit-loupe-lens {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border: 4px solid rgba(255, 255, 255, 0.96);
+  border-radius: 999px;
+  background: #101514;
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.48),
+    inset 0 0 0 2px rgba(34, 48, 43, 0.28);
+}
+
+.line-edit-loupe::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -30px;
+  width: 14px;
+  height: 42px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.36);
+  transform: translateX(-50%) rotate(28deg);
+  transform-origin: top center;
+}
+
+.line-edit-loupe-lens img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  max-width: none;
+  object-fit: fill;
+  transform-origin: 0 0;
+}
+
+.line-edit-loupe-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 34px;
+  height: 34px;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.8));
+}
+
+.line-edit-loupe-crosshair::before,
+.line-edit-loupe-crosshair::after {
+  content: "";
+  position: absolute;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.line-edit-loupe-crosshair::before {
+  left: 50%;
+  top: -11px;
+  width: 2px;
+  height: 54px;
+  transform: translateX(-50%);
+}
+
+.line-edit-loupe-crosshair::after {
+  left: -11px;
+  top: 50%;
+  width: 54px;
+  height: 2px;
+  transform: translateY(-50%);
+}
+
 .head-undo-button {
   position: absolute;
   z-index: 7;

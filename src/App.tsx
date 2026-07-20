@@ -795,6 +795,15 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   const activeStroke = drag?.type === "stroke" ? drag.points : [];
   const activeDisplayBox = editingTag?.bbox;
   const activeOrientedPoints = editingTag && image ? orientedCorrectedBoxPoints(editingTag, image) : null;
+  const lineLoupePoint =
+    drag?.type === "lineEndpoint"
+      ? (() => {
+          const tag = tags.find((current) => current.id === drag.tagId);
+          const line = drag.line === "body" ? tag?.bodyLine : tag?.finLine;
+          if (!line?.length) return null;
+          return line[drag.endpoint === "start" ? 0 : line.length - 1];
+        })()
+      : null;
   const imageFrame = image ? coverImageFrame(image, stageSize) : null;
 
   useEffect(() => {
@@ -2061,6 +2070,10 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                   <span className={`aim-crosshair ${drag?.type === "stroke" ? "painting" : ""}`} style={pointHandleStyle(aimPoint)} aria-hidden="true" />
                 )}
 
+                {image && lineLoupePoint && (
+                  <LineEditLoupe image={image} point={lineLoupePoint} viewScale={view.scale} />
+                )}
+
                 {tags.map((tag, index) => (
                   <button
                     key={`${tag.id}-head-select`}
@@ -2407,6 +2420,44 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         />
       )}
     </main>
+  );
+}
+
+function LineEditLoupe({ image, point, viewScale }: { image: ImageInfo; point: Point; viewScale: number }) {
+  const size = 132;
+  const zoom = 3.4;
+  const center = size / 2;
+  const left = clamp(point.x, 0.08, 0.92) * 100;
+  const top = clamp(point.y, 0.16, 0.92) * 100;
+  const offsetY = point.y < 0.2 ? 18 : -18;
+  const scale = controlScale(viewScale);
+
+  return (
+    <div
+      className="line-edit-loupe"
+      style={{
+        left: `${left}%`,
+        top: `${top}%`,
+        "--loupe-scale": scale,
+        "--loupe-size": `${size}px`,
+        "--loupe-transform": `translate(-50%, calc(-100% + ${offsetY}px))`,
+      } as CSSProperties}
+      aria-hidden="true"
+    >
+      <div className="line-edit-loupe-lens">
+        <img
+          src={image.src}
+          alt=""
+          draggable={false}
+          style={{
+            width: `${image.width * zoom}px`,
+            height: `${image.height * zoom}px`,
+            transform: `translate(${center - point.x * image.width * zoom}px, ${center - point.y * image.height * zoom}px)`,
+          }}
+        />
+        <span className="line-edit-loupe-crosshair" />
+      </div>
+    </div>
   );
 }
 
