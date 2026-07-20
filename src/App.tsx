@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
-import { deriveAnnotationBuckets, deriveFinMode, TaggerAnnotationResult, TaggerCompletePayload } from "./workflow";
+import { deriveAnnotationBuckets, deriveFinMode, FinMetrics, TaggerAnnotationResult, TaggerCompletePayload } from "./workflow";
 
 type Mode = "tag" | "move";
 type PaintMode = "direct" | "crosshair";
@@ -289,6 +289,117 @@ function pointSegmentDistance(point: Point, start: Point, end: Point) {
 
 function segmentDistance(a: Point, b: Point, c: Point, d: Point) {
   return Math.min(pointSegmentDistance(a, c, d), pointSegmentDistance(b, c, d), pointSegmentDistance(c, a, b), pointSegmentDistance(d, a, b));
+}
+
+function pathLengthPx(points: Point[], image: ImageInfo) {
+  return points.slice(1).reduce((sum, point, index) => {
+    const previous = points[index];
+    return sum + Math.hypot((point.x - previous.x) * image.width, (point.y - previous.y) * image.height);
+  }, 0);
+}
+
+function nearestMainLineInfo(point: Point, bodyLine: Point[], image: ImageInfo) {
+  let best:
+    | {
+        distancePx: number;
+        segmentStart: Point;
+        segmentEnd: Point;
+        sideValue: number;
+      }
+    | null = null;
+
+  for (let index = 1; index < bodyLine.length; index += 1) {
+    const start = bodyLine[index - 1];
+    const end = bodyLine[index];
+    const dx = (end.x - start.x) * image.width;
+    const dy = (end.y - start.y) * image.height;
+    const px = (point.x - start.x) * image.width;
+    const py = (point.y - start.y) * image.height;
+    const lengthSq = dx * dx + dy * dy;
+    const t = lengthSq === 0 ? 0 : clamp((px * dx + py * dy) / lengthSq, 0, 1);
+    const projectedX = start.x * image.width + dx * t;
+    const projectedY = start.y * image.height + dy * t;
+    const pointX = point.x * image.width;
+    const pointY = point.y * image.height;
+    const distancePx = Math.hypot(pointX - projectedX, pointY - projectedY);
+    const sideValue = dx * py - dy * px;
+
+    if (!best || distancePx < best.distancePx) {
+      best = { distancePx, segmentStart: start, segmentEnd: end, sideValue };
+    }
+  }
+
+  return best;
+}
+
+function angleBetweenLinesDeg(line: Point[], bodyStart: Point, bodyEnd: Point, image: ImageInfo) {
+  const first = line[0];
+  const last = line[line.length - 1];
+  if (!first || !last) return 0;
+  const finX = (last.x - first.x) * image.width;
+  const finY = (last.y - first.y) * image.height;
+  const bodyX = (bodyEnd.x - bodyStart.x) * image.width;
+  const bodyY = (bodyEnd.y - bodyStart.y) * image.height;
+  const finLength = Math.hypot(finX, finY);
+  const bodyLength = Math.hypot(bodyX, bodyY);
+  if (finLength <= 0.000001 || bodyLength <= 0.000001) return 0;
+  const dot = Math.abs((finX * bodyX + finY * bodyY) / (finLength * bodyLength));
+  return (Math.acos(clamp(dot, -1, 1)) * 180) / Math.PI;
+}
+
+function deriveFinMetrics(tag: KoiTag, image: ImageInfo): FinMetrics | undefined {
+  const finLine = tag.finLine;
+  if (!finLine || finLine.length < 2 || tag.bodyLine.length < 2) return undefined;
+
+  const crossesMainLine = strokesIntersect(tag.bodyLine, finLine, 0.01);
+  const pointInfos = finLine
+    .map((point) => ({ point, info: nearestMainLineInfo(point, tag.bodyLine, image) }))
+    .filter((item): item is { point: Point; info: NonNullable<ReturnType<typeof nearestMainLineInfo>> } => Boolean(item.info));
+  if (!pointInfos.length) return undefined;
+
+  const sideValues = pointInfos.map((item) => item.info.sideValue);
+  const hasLeft = sideValues.some((value) => value > 0.000001);
+  const hasRight = sideValues.some((value) => value < -0.000001);
+  const minDistancePx = Math.min(...pointInfos.map((item) => item.info.distancePx));
+  const relationToBody = crossesMainLine
+    ? "crosses-main-line"
+    : minDistancePx <= Math.max(16, bodyLengthPx(tag, image) * 0.045)
+      ? "one-sided-attached"
+      : minDistancePx <= Math.max(42, bodyLengthPx(tag, image) * 0.12)
+        ? "near-body-detached"
+        : "unclear";
+
+  const buildSide = (sideValue: 1 | -1) => {
+    const sidePoints = pointInfos.filter((item) => (sideValue > 0 ? item.info.sideValue >= -0.000001 : item.info.sideValue <= 0.000001));
+    if (!sidePoints.length) return null;
+    const sideLine = sidePoints.map((item) => item.point);
+    const middleInfo = sidePoints[Math.floor(sidePoints.length / 2)].info;
+    const sideDistancePx = Math.min(...sidePoints.map((item) => item.info.distancePx));
+    const sideReachPx = Math.max(...sidePoints.map((item) => item.info.distancePx));
+    return {
+      side: sideValue > 0 ? "main-line-left" : "main-line-right",
+      line: sideLine,
+      angleDeg: angleBetweenLinesDeg(sideLine, middleInfo.segmentStart, middleInfo.segmentEnd, image),
+      lengthPx: Math.max(pathLengthPx(sideLine, image), sideReachPx),
+      distanceToMainLinePx: sideDistancePx,
+      visible: true,
+    } as const;
+  };
+
+  const sides = [hasLeft ? buildSide(1) : null, hasRight ? buildSide(-1) : null].filter((side): side is NonNullable<ReturnType<typeof buildSide>> => Boolean(side));
+
+  return {
+    relationToBody,
+    sides,
+    crossesMainLine,
+  };
+}
+
+function isFinStrokeForTag(tag: KoiTag, stroke: Point[], image: ImageInfo | null) {
+  if (strokesIntersect(tag.bodyLine, stroke)) return true;
+  if (!image) return false;
+  const metrics = deriveFinMetrics({ ...tag, finLine: stroke }, image);
+  return metrics?.relationToBody === "one-sided-attached" || metrics?.relationToBody === "near-body-detached";
 }
 
 function segmentIntersects(a: Point, b: Point, c: Point, d: Point) {
@@ -1044,6 +1155,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       bodyLine: tag.bodyLine,
       finLine: tag.finLine,
       finMode: deriveFinMode({ bodyLine: tag.bodyLine, finLine: tag.finLine }),
+      finMetrics: deriveFinMetrics(tag, image),
       correctedBox: geometry.correctedBox,
       cropBox: geometry.correctedBox,
       rotationDeg: geometry.rotation,
@@ -1458,7 +1570,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
 
     if (activeTag) {
       const now = new Date();
-      const isFinLine = strokesIntersect(activeTag.bodyLine, stroke);
+      const isFinLine = isFinStrokeForTag(activeTag, stroke, image);
 
       if (!isFinLine) {
         const id = crypto.randomUUID();
