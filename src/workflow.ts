@@ -30,6 +30,11 @@ export type FinMetrics = {
   crossesMainLine: boolean;
 };
 
+export type CropInference = {
+  mirroredFinWidth: boolean;
+  source: "one-sided-fin" | "two-sided-fin" | "body-only";
+};
+
 export type AnnotationBucket =
   | "has_fin_line"
   | "no_fin_line"
@@ -50,6 +55,7 @@ export type FishAnnotationPayload = {
   correctedPolygon?: WorkflowPoint[];
   correctedBox?: WorkflowBox;
   cropBox?: WorkflowBox;
+  cropInference?: CropInference;
   rotationDeg?: number;
   rotationPivot?: WorkflowPoint;
   imageWidth: number;

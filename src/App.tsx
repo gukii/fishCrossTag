@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
-import { deriveAnnotationBuckets, deriveFinMode, FinMetrics, TaggerAnnotationResult, TaggerCompletePayload } from "./workflow";
+import { CropInference, deriveAnnotationBuckets, deriveFinMode, FinMetrics, TaggerAnnotationResult, TaggerCompletePayload } from "./workflow";
 
 type Mode = "tag" | "move";
 type PaintMode = "direct" | "crosshair";
@@ -402,6 +402,17 @@ function isFinStrokeForTag(tag: KoiTag, stroke: Point[], image: ImageInfo | null
   return metrics?.relationToBody === "one-sided-attached" || metrics?.relationToBody === "near-body-detached";
 }
 
+function deriveCropInference(tag: KoiTag, image: ImageInfo): CropInference {
+  const metrics = deriveFinMetrics(tag, image);
+  if (!metrics?.sides.length) {
+    return { mirroredFinWidth: false, source: "body-only" };
+  }
+  if (!metrics.crossesMainLine && metrics.sides.length === 1 && (metrics.relationToBody === "one-sided-attached" || metrics.relationToBody === "near-body-detached")) {
+    return { mirroredFinWidth: true, source: "one-sided-fin" };
+  }
+  return { mirroredFinWidth: false, source: "two-sided-fin" };
+}
+
 function segmentIntersects(a: Point, b: Point, c: Point, d: Point) {
   const cross = (p: Point, q: Point, r: Point) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
   const onSegment = (p: Point, q: Point, r: Point) =>
@@ -655,10 +666,37 @@ function rotatedAnnotationPoints(tag: KoiTag, image: ImageInfo, rotation = frame
   return sourcePoints.map((point) => rotateImagePoint(point, center, rotation, image));
 }
 
+function mirroredOneSidedFinCropPoints(tag: KoiTag, image: ImageInfo, rotation: number) {
+  if (!tag.finLine || tag.finLine.length < 2) return [];
+  const metrics = deriveFinMetrics(tag, image);
+  if (!metrics || metrics.crossesMainLine || metrics.sides.length !== 1) return [];
+  if (metrics.relationToBody !== "one-sided-attached" && metrics.relationToBody !== "near-body-detached") return [];
+
+  const center = correctionCenter(tag);
+  const rotatedBody = tag.bodyLine.map((point) => rotateImagePoint(point, center, rotation, image));
+  const rotatedFin = tag.finLine.map((point) => rotateImagePoint(point, center, rotation, image));
+  const bodyCenterX = polygonCenter(rotatedBody).x;
+  const finDistances = rotatedFin.map((point) => point.x - bodyCenterX);
+  const reachesRight = Math.max(...finDistances) > Math.abs(Math.min(...finDistances));
+  const visibleReach = reachesRight ? Math.max(...finDistances) : Math.abs(Math.min(...finDistances));
+  if (visibleReach <= 0.000001) return [];
+
+  const mirroredX = bodyCenterX + (reachesRight ? -visibleReach : visibleReach);
+  const minY = Math.min(...rotatedFin.map((point) => point.y), ...rotatedBody.map((point) => point.y));
+  const maxY = Math.max(...rotatedFin.map((point) => point.y), ...rotatedBody.map((point) => point.y));
+  const midY = rotatedFin.reduce((sum, point) => sum + point.y, 0) / rotatedFin.length;
+
+  return [
+    { x: mirroredX, y: midY },
+    { x: mirroredX, y: minY },
+    { x: mirroredX, y: maxY },
+  ];
+}
+
 function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = frameCorrectionRotation(tag, image)) {
   if (tag.polygonBoxEdited && tag.polygonBox) return tag.polygonBox;
 
-  const rotatedPoints = rotatedAnnotationPoints(tag, image, rotation);
+  const rotatedPoints = [...rotatedAnnotationPoints(tag, image, rotation), ...mirroredOneSidedFinCropPoints(tag, image, rotation)];
   const fallbackMarginPx = tag.finLine ? 1 : bodyLengthPx(tag, image) * 0.04;
   const strokeSafeMarginPx = Math.max(fallbackMarginPx, CORRECTED_BOX_STROKE_MARGIN_PX);
   return boxFromPointsWithMargin(rotatedPoints, strokeSafeMarginPx / image.width, strokeSafeMarginPx / image.height);
@@ -1158,6 +1196,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       finMetrics: deriveFinMetrics(tag, image),
       correctedBox: geometry.correctedBox,
       cropBox: geometry.correctedBox,
+      cropInference: deriveCropInference(tag, image),
       rotationDeg: geometry.rotation,
       rotationPivot: correctionCenter(tag),
       correctedPolygon: orientedCorrectedBoxPoints(tag, image),
