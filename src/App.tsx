@@ -25,6 +25,7 @@ type Mode = "tag" | "move";
 type PaintMode = "direct" | "crosshair";
 type Handle = "nw" | "ne" | "sw" | "se" | "move";
 type EditTarget = "auto" | "body" | "fin";
+type LineEndpointRef = { tagId: string; line: "body" | "fin"; endpoint: "start" | "end"; point: Point };
 
 type Point = {
   x: number;
@@ -85,7 +86,7 @@ type DragState =
   | { type: "stroke"; pointerId: number; points: Point[]; source: "direct" | "crosshair" }
   | { type: "bbox"; pointerId: number; tagId: string; handle: Handle; startBox: Box; startPoint: Point }
   | { type: "rotate"; pointerId: number; tagId: string; startAngle: number; startRotation: number; center: Point }
-  | { type: "lineEndpoint"; pointerId: number; tagId: string; line: "body" | "fin"; endpoint: "start" | "end" }
+  | (LineEndpointRef & { type: "lineEndpoint"; pointerId: number; startPoint: Point; startPointer: Point; moved: boolean })
   | { type: "finishTap"; pointerId: number; tagId: string; startPoint: Point; moved: boolean };
 
 type GestureState = {
@@ -148,6 +149,13 @@ if (import.meta.hot) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+function clampPoint(point: Point): Point {
+  return {
+    x: clamp(point.x, 0, 1),
+    y: clamp(point.y, 0, 1),
+  };
 }
 
 function cropRectPx(crop: Box, innerBox: Box, image: ImageInfo) {
@@ -777,6 +785,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   const [activeTagId, setActiveTagId] = useState<string | null>(null);
   const [editingTagId, setEditingTagId] = useState<string | null>(null);
   const [lineEditingTagId, setLineEditingTagId] = useState<string | null>(null);
+  const [lineEndpointSelection, setLineEndpointSelection] = useState<LineEndpointRef | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -795,14 +804,13 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   const activeStroke = drag?.type === "stroke" ? drag.points : [];
   const activeDisplayBox = editingTag?.bbox;
   const activeOrientedPoints = editingTag && image ? orientedCorrectedBoxPoints(editingTag, image) : null;
-  const lineLoupePoint =
-    drag?.type === "lineEndpoint"
-      ? (() => {
-          const tag = tags.find((current) => current.id === drag.tagId);
-          const line = drag.line === "body" ? tag?.bodyLine : tag?.finLine;
-          if (!line?.length) return null;
-          return line[drag.endpoint === "start" ? 0 : line.length - 1];
-        })()
+  const activeLineEndpointDrag = drag?.type === "lineEndpoint" ? drag : null;
+  const activeLineEndpointTarget = activeLineEndpointDrag ?? lineEndpointSelection;
+  const activeHeadEndpointEdit =
+    lineEditing &&
+    activeLineEndpointTarget?.line === "body" &&
+    activeLineEndpointTarget.endpoint === "start"
+      ? activeLineEndpointTarget
       : null;
   const imageFrame = image ? coverImageFrame(image, stageSize) : null;
 
@@ -887,14 +895,22 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     if (!drag || (drag.type !== "bbox" && drag.type !== "rotate" && drag.type !== "lineEndpoint")) return;
 
     function move(event: globalThis.PointerEvent) {
-      const point = pointFromClient(event.clientX, event.clientY, { clampToImage: false });
+      const point = pointFromClient(event.clientX, event.clientY, { clampToImage: drag.type === "lineEndpoint" });
       if (!point) return;
       if (drag.type === "bbox") {
         updateBboxDrag(drag, point);
         return;
       }
       if (drag.type === "lineEndpoint") {
-        updateLineEndpointDrag(drag, point);
+        const targetPoint = clampPoint({
+          x: drag.startPoint.x + point.x - drag.startPointer.x,
+          y: drag.startPoint.y + point.y - drag.startPointer.y,
+        });
+        setDrag({
+          ...drag,
+          point: targetPoint,
+          moved: drag.moved || Math.hypot(point.x - drag.startPointer.x, point.y - drag.startPointer.y) > 0.006,
+        });
         return;
       }
 
@@ -906,6 +922,9 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
 
     function finish(event: globalThis.PointerEvent) {
       if (event.pointerId === drag.pointerId) {
+        if (drag.type === "lineEndpoint") {
+          completeLineEndpointDrag(drag, drag.point);
+        }
         setDrag(null);
       }
     }
@@ -938,6 +957,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       setActiveTagId(null);
       setEditingTagId(null);
       setLineEditingTagId(null);
+      setLineEndpointSelection(null);
       setDrag(null);
       setDrawerOpen(true);
       setEditTarget("auto");
@@ -1503,7 +1523,15 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     }
 
     if (drag.type === "lineEndpoint") {
-      updateLineEndpointDrag(drag, point);
+      const targetPoint = clampPoint({
+        x: drag.startPoint.x + point.x - drag.startPointer.x,
+        y: drag.startPoint.y + point.y - drag.startPointer.y,
+      });
+      setDrag({
+        ...drag,
+        point: targetPoint,
+        moved: drag.moved || Math.hypot(point.x - drag.startPointer.x, point.y - drag.startPointer.y) > 0.006,
+      });
       return;
     }
 
@@ -1517,7 +1545,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     }
   }
 
-  function updateLineEndpointDrag(activeDrag: Extract<DragState, { type: "lineEndpoint" }>, point: Point) {
+  function commitLineEndpointDrag(activeDrag: Extract<DragState, { type: "lineEndpoint" }>, point: Point) {
     setTags((current) =>
       current.map((tag) => {
         if (tag.id !== activeDrag.tagId) return tag;
@@ -1544,6 +1572,21 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         };
       }),
     );
+  }
+
+  function completeLineEndpointDrag(activeDrag: Extract<DragState, { type: "lineEndpoint" }>, point: Point) {
+    const moved = activeDrag.moved || Math.hypot(point.x - activeDrag.startPoint.x, point.y - activeDrag.startPoint.y) > 0.006;
+    if (!moved) {
+      setLineEndpointSelection(null);
+      return;
+    }
+    commitLineEndpointDrag(activeDrag, point);
+    setLineEndpointSelection({
+      tagId: activeDrag.tagId,
+      line: activeDrag.line,
+      endpoint: activeDrag.endpoint,
+      point,
+    });
   }
 
   function updateBboxDrag(activeDrag: Extract<DragState, { type: "bbox" }>, point: Point) {
@@ -1600,6 +1643,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     }
 
     if (drag.type === "lineEndpoint") {
+      completeLineEndpointDrag(drag, drag.point);
       setDrag(null);
       return;
     }
@@ -1694,6 +1738,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         setActiveTagId(id);
         setEditingTagId(null);
         setLineEditingTagId(null);
+        setLineEndpointSelection(null);
         setEditTarget("auto");
         return;
       }
@@ -1717,6 +1762,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       );
       setEditingTagId(null);
       setLineEditingTagId(null);
+      setLineEndpointSelection(null);
       setFinDeleteTagId(activeTag.id);
       return;
     }
@@ -1737,6 +1783,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     setActiveTagId(id);
     setEditingTagId(null);
     setLineEditingTagId(null);
+    setLineEndpointSelection(null);
     setEditTarget("auto");
   }
 
@@ -1752,6 +1799,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     setActiveTagId(tagId);
     setEditingTagId(tagId);
     setLineEditingTagId(null);
+    setLineEndpointSelection(null);
     setShowOriginalTagId(null);
     setDrag({ type: "bbox", pointerId: event.pointerId, tagId, handle, startBox, startPoint });
   }
@@ -1769,6 +1817,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     setActiveTagId(tagId);
     setEditingTagId(tagId);
     setLineEditingTagId(null);
+    setLineEndpointSelection(null);
     setShowOriginalTagId(null);
     updateTagCorrection(tagId, {
       polygonBox: startBox,
@@ -1790,23 +1839,59 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     if (tagId !== editingTagId || !(event.target as HTMLElement).closest(".bbox-move-handle")) return;
     event.stopPropagation();
     setLineEditingTagId(tagId);
+    setLineEndpointSelection(null);
     setShowOriginalTagId(null);
   }
 
-  function beginLineEndpointDrag(event: PointerEvent<HTMLSpanElement>, tagId: string, line: "body" | "fin", endpoint: "start" | "end") {
+  function currentLineEndpoint(tagId: string, line: "body" | "fin", endpoint: "start" | "end") {
+    const tag = tags.find((current) => current.id === tagId);
+    const points = line === "body" ? tag?.bodyLine : tag?.finLine;
+    if (!points?.length) return null;
+    return points[endpoint === "start" ? 0 : points.length - 1];
+  }
+
+  function selectLineEndpoint(event: PointerEvent<HTMLSpanElement>, tagId: string, line: "body" | "fin", endpoint: "start" | "end") {
     if (mode === "move") return;
     event.stopPropagation();
+    event.preventDefault();
+    const point = currentLineEndpoint(tagId, line, endpoint);
+    if (!point) return;
     setActiveTagId(tagId);
     setEditingTagId(tagId);
     setLineEditingTagId(tagId);
     setShowOriginalTagId(null);
     setFinDeleteTagId(null);
-    setDrag({ type: "lineEndpoint", pointerId: event.pointerId, tagId, line, endpoint });
+    setLineEndpointSelection({ tagId, line, endpoint, point });
+  }
+
+  function beginLineEndpointTargetDrag(event: PointerEvent<HTMLSpanElement>) {
+    if (mode === "move" || !lineEndpointSelection) return;
+    event.stopPropagation();
+    event.preventDefault();
+    const point = pointFromPointer(event, { clampToImage: true });
+    if (!point) return;
+    setDrag({
+      type: "lineEndpoint",
+      pointerId: event.pointerId,
+      tagId: lineEndpointSelection.tagId,
+      line: lineEndpointSelection.line,
+      endpoint: lineEndpointSelection.endpoint,
+      point: lineEndpointSelection.point,
+      startPoint: lineEndpointSelection.point,
+      startPointer: point,
+      moved: false,
+    });
   }
 
   function toggleLineEditing() {
     if (!editingTag) return;
-    setLineEditingTagId((current) => (current === editingTag.id ? null : editingTag.id));
+    setLineEditingTagId((current) => {
+      if (current === editingTag.id) {
+        setLineEndpointSelection(null);
+        return null;
+      }
+      return editingTag.id;
+    });
   }
 
   function finishTag() {
@@ -1817,6 +1902,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     setActiveTagId(null);
     setEditingTagId(null);
     setLineEditingTagId(null);
+    setLineEndpointSelection(null);
     setShowOriginalTagId(null);
     setDrawerOpen(true);
     setEditTarget("auto");
@@ -1858,12 +1944,14 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       setActiveTagId(null);
       setEditingTagId(null);
       setLineEditingTagId(null);
+      setLineEndpointSelection(null);
       setShowOriginalTagId(null);
       setEditTarget("auto");
     }
     if (editingTagId === tagId) {
       setEditingTagId(null);
       setLineEditingTagId(null);
+      setLineEndpointSelection(null);
     }
   }
 
@@ -1884,6 +1972,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     setActiveTagId(tagId);
     setEditingTagId(tagId);
     setLineEditingTagId(null);
+    setLineEndpointSelection(null);
     setShowOriginalTagId(null);
     setEditTarget("auto");
     setFinDeleteTagId(null);
@@ -1904,6 +1993,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       setActiveTagId(null);
       setEditingTagId(null);
       setLineEditingTagId(null);
+      setLineEndpointSelection(null);
       setShowOriginalTagId(null);
       setEditTarget("auto");
       setFinDeleteTagId(null);
@@ -1914,6 +2004,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     setActiveTagId(tagId);
     setEditingTagId(tagId);
     setLineEditingTagId(null);
+    setLineEndpointSelection(null);
     setShowOriginalTagId(tagId);
     setEditTarget("auto");
     setFinDeleteTagId(null);
@@ -1969,8 +2060,8 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 <svg className="overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none">
                   {tags.map((tag, index) => (
                     <g key={tag.id} className={tag.id === activeTagId ? "selected" : ""}>
-                      <path d={pathFromPoints(tag.bodyLine)} className="body-line" />
-                      {tag.finLine && <path d={pathFromPoints(tag.finLine)} className="fin-line" />}
+                      <path d={pathFromPoints(tag.bodyLine)} className={`body-line ${activeLineEndpointTarget?.tagId === tag.id && activeLineEndpointTarget.line === "body" ? "line-edit-faded" : ""}`} />
+                      {tag.finLine && <path d={pathFromPoints(tag.finLine)} className={`fin-line ${activeLineEndpointTarget?.tagId === tag.id && activeLineEndpointTarget.line === "fin" ? "line-edit-faded" : ""}`} />}
                       {image && tag.id === editingTagId && !lineEditing && (
                         <polygon className="oriented-bbox" points={polygonPoints(orientedCorrectedBoxPoints(tag, image))} />
                       )}
@@ -2031,68 +2122,78 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
 
                 {editingTag && lineEditing && (
                   <>
+                    {activeHeadEndpointEdit?.tagId !== editingTag.id && (
+                      <span
+                        className={`line-endpoint-handle body-start ${activeLineEndpointTarget?.tagId === editingTag.id && activeLineEndpointTarget.line === "body" && activeLineEndpointTarget.endpoint === "start" ? "selected-source" : ""}`}
+                        style={pointHandleStyle(editingTag.bodyLine[0], view.scale)}
+                        data-no-draw
+                        aria-label="Move fish head"
+                        onPointerDown={(event) => selectLineEndpoint(event, editingTag.id, "body", "start")}
+                      />
+                    )}
                     <span
-                      className="line-endpoint-handle body-start"
-                      style={pointHandleStyle(editingTag.bodyLine[0], view.scale)}
-                      data-no-draw
-                      aria-label="Move fish head"
-                      onPointerDown={(event) => beginLineEndpointDrag(event, editingTag.id, "body", "start")}
-                    />
-                    <span
-                      className="line-endpoint-handle body-end"
+                      className={`line-endpoint-handle body-end ${activeLineEndpointTarget?.tagId === editingTag.id && activeLineEndpointTarget.line === "body" && activeLineEndpointTarget.endpoint === "end" ? "selected-source" : ""}`}
                       style={pointHandleStyle(editingTag.bodyLine[editingTag.bodyLine.length - 1], view.scale)}
                       data-no-draw
                       aria-label="Move fish tail"
-                      onPointerDown={(event) => beginLineEndpointDrag(event, editingTag.id, "body", "end")}
+                      onPointerDown={(event) => selectLineEndpoint(event, editingTag.id, "body", "end")}
                     />
                     {editingTag.finLine && (
                       <>
                         <span
-                          className="line-endpoint-handle fin-start"
+                          className={`line-endpoint-handle fin-start ${activeLineEndpointTarget?.tagId === editingTag.id && activeLineEndpointTarget.line === "fin" && activeLineEndpointTarget.endpoint === "start" ? "selected-source" : ""}`}
                           style={pointHandleStyle(editingTag.finLine[0], view.scale)}
                           data-no-draw
                           aria-label="Move fin line start"
-                          onPointerDown={(event) => beginLineEndpointDrag(event, editingTag.id, "fin", "start")}
+                          onPointerDown={(event) => selectLineEndpoint(event, editingTag.id, "fin", "start")}
                         />
                         <span
-                          className="line-endpoint-handle fin-end"
+                          className={`line-endpoint-handle fin-end ${activeLineEndpointTarget?.tagId === editingTag.id && activeLineEndpointTarget.line === "fin" && activeLineEndpointTarget.endpoint === "end" ? "selected-source" : ""}`}
                           style={pointHandleStyle(editingTag.finLine[editingTag.finLine.length - 1], view.scale)}
                           data-no-draw
                           aria-label="Move fin line end"
-                          onPointerDown={(event) => beginLineEndpointDrag(event, editingTag.id, "fin", "end")}
+                          onPointerDown={(event) => selectLineEndpoint(event, editingTag.id, "fin", "end")}
                         />
                       </>
                     )}
                   </>
                 )}
 
+                {activeLineEndpointTarget && lineEditing && (
+                  <span
+                    className={`line-endpoint-target ${activeLineEndpointTarget.line}`}
+                    style={pointHandleStyle(activeLineEndpointTarget.point, view.scale)}
+                    data-no-draw
+                    aria-label="Drag selected line endpoint"
+                    onPointerDown={beginLineEndpointTargetDrag}
+                  />
+                )}
+
                 {mode === "tag" && paintMode === "crosshair" && aimPoint && (
                   <span className={`aim-crosshair ${drag?.type === "stroke" ? "painting" : ""}`} style={pointHandleStyle(aimPoint)} aria-hidden="true" />
                 )}
 
-                {image && lineLoupePoint && (
-                  <LineEditLoupe image={image} point={lineLoupePoint} viewScale={view.scale} />
+                {tags.map((tag, index) =>
+                  activeHeadEndpointEdit?.tagId === tag.id ? null : (
+                    <button
+                      key={`${tag.id}-head-select`}
+                      className={`head-select ${tag.id === activeTagId ? "active" : ""}`}
+                      style={{
+                        ...pointHandleStyle(tag.bodyLine[0], view.scale),
+                      }}
+                      data-no-draw
+                      onPointerDown={(event) => {
+                        if (mode !== "move") event.stopPropagation();
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (mode === "move") return;
+                        toggleTagFromHead(tag.id);
+                      }}
+                      aria-label={`Select fish ${index + 1}`}
+                    />
+                  ),
                 )}
-
-                {tags.map((tag, index) => (
-                  <button
-                    key={`${tag.id}-head-select`}
-                    className={`head-select ${tag.id === activeTagId ? "active" : ""}`}
-                    style={{
-                      ...pointHandleStyle(tag.bodyLine[0], view.scale),
-                    }}
-                    data-no-draw
-                    onPointerDown={(event) => {
-                      if (mode !== "move") event.stopPropagation();
-                    }}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      if (mode === "move") return;
-                      toggleTagFromHead(tag.id);
-                    }}
-                    aria-label={`Select fish ${index + 1}`}
-                  />
-                ))}
 
                 {activeTag?.finLine && finDeleteTagId === activeTag.id && (
                   <button
@@ -2420,44 +2521,6 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         />
       )}
     </main>
-  );
-}
-
-function LineEditLoupe({ image, point, viewScale }: { image: ImageInfo; point: Point; viewScale: number }) {
-  const size = 132;
-  const zoom = 3.4;
-  const center = size / 2;
-  const left = clamp(point.x, 0.08, 0.92) * 100;
-  const top = clamp(point.y, 0.16, 0.92) * 100;
-  const offsetY = point.y < 0.2 ? 18 : -18;
-  const scale = controlScale(viewScale);
-
-  return (
-    <div
-      className="line-edit-loupe"
-      style={{
-        left: `${left}%`,
-        top: `${top}%`,
-        "--loupe-scale": scale,
-        "--loupe-size": `${size}px`,
-        "--loupe-transform": `translate(-50%, calc(-100% + ${offsetY}px))`,
-      } as CSSProperties}
-      aria-hidden="true"
-    >
-      <div className="line-edit-loupe-lens">
-        <img
-          src={image.src}
-          alt=""
-          draggable={false}
-          style={{
-            width: `${image.width * zoom}px`,
-            height: `${image.height * zoom}px`,
-            transform: `translate(${center - point.x * image.width * zoom}px, ${center - point.y * image.height * zoom}px)`,
-          }}
-        />
-        <span className="line-edit-loupe-crosshair" />
-      </div>
-    </div>
   );
 }
 
