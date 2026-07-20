@@ -94,6 +94,21 @@ export type TaggerCompletePayload = {
   completedAt: string;
 };
 
+export type FishCrossLineTagResultV1 = {
+  bodyLine: WorkflowPoint[];
+  finLine?: WorkflowPoint[];
+  rotationDeg: number;
+  rotationPivot: WorkflowPoint;
+  cropBox: WorkflowBox;
+};
+
+export type FishCrossLineResultV1 = {
+  version: 1;
+  imageWidth: number;
+  imageHeight: number;
+  tags: FishCrossLineTagResultV1[];
+};
+
 export type TaggerSession = {
   id: string;
   image: TaggerSessionImage;

@@ -80,6 +80,7 @@ type AppProps = {
   sessionMode?: boolean;
   metadata?: Record<string, unknown>;
   onSessionComplete?: (payload: TaggerCompletePayload) => void | Promise<void>;
+  persistLocalSettings?: boolean;
 };
 
 type DragState =
@@ -797,7 +798,7 @@ function coverImageFrame(image: ImageInfo, stage: PixelRect): PixelRect {
   };
 }
 
-export default function App({ initialImage, sessionId, sessionMode = false, metadata, onSessionComplete }: AppProps = {}) {
+export default function App({ initialImage, sessionId, sessionMode = false, metadata, onSessionComplete, persistLocalSettings = true }: AppProps = {}) {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageTransformRef = useRef<HTMLDivElement | null>(null);
   const sourceImageRef = useRef<HTMLImageElement | null>(null);
@@ -819,8 +820,8 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   const [drag, setDrag] = useState<DragState | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [cropSettings, setCropSettings] = useState<CropSettings>(() => loadCropSettings());
-  const [crosshairOffsetInput, setCrosshairOffsetInput] = useState(() => String(loadCropSettings().crosshairOffsetPx));
+  const [cropSettings, setCropSettings] = useState<CropSettings>(() => (persistLocalSettings ? loadCropSettings() : DEFAULT_CROP_SETTINGS));
+  const [crosshairOffsetInput, setCrosshairOffsetInput] = useState(() => String((persistLocalSettings ? loadCropSettings() : DEFAULT_CROP_SETTINGS).crosshairOffsetPx));
   const [showCrosshairIntro, setShowCrosshairIntro] = useState(false);
   const [finDeleteTagId, setFinDeleteTagId] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<EditTarget>("auto");
@@ -849,8 +850,9 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   }, [view]);
 
   useEffect(() => {
+    if (!persistLocalSettings) return;
     localStorage.setItem(CROP_SETTINGS_KEY, JSON.stringify(cropSettings));
-  }, [cropSettings]);
+  }, [cropSettings, persistLocalSettings]);
 
   useEffect(() => {
     setCrosshairOffsetInput(String(cropSettings.crosshairOffsetPx));

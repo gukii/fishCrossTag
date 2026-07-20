@@ -1111,12 +1111,53 @@ h2 {
   color: #c84b3c;
 }
 
+.embed-state {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: #e8f0eb;
+  background: #111614;
+}
+
+.embed-state section {
+  display: grid;
+  gap: 12px;
+  max-width: 360px;
+  text-align: center;
+}
+
+.embed-state h1 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.embed-state p {
+  margin: 0;
+  color: #b7c2bc;
+}
+
+.embed-state button {
+  justify-self: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 8px;
+  color: #111614;
+  background: #e8eee9;
+  font-weight: 850;
+}
+
 .parent-demo-shell {
   min-height: 100dvh;
   display: grid;
   grid-template-columns: minmax(320px, 420px) 1fr;
   color: #1d2824;
   background: #eef2ef;
+}
+
+.embed-parent-shell .parent-demo-result pre {
+  max-height: 52dvh;
 }
 
 .parent-demo-panel {

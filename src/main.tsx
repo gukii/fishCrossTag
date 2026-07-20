@@ -4,6 +4,8 @@ import "./styles.css";
 import App from "./App";
 import AffinePrototype from "./AffinePrototype";
 import Dashboard from "./Dashboard";
+import EmbedParentDemo from "./EmbedParentDemo";
+import EmbedTagger from "./EmbedTagger";
 import ParentDemo from "./ParentDemo";
 import TaggerSession from "./TaggerSession";
 
@@ -15,9 +17,13 @@ const Root =
       ? Dashboard
       : routePath === "/parent-demo"
         ? ParentDemo
-        : routePath.startsWith("/s/")
-          ? TaggerSession
-          : App;
+        : routePath === "/embed-parent-demo"
+          ? EmbedParentDemo
+          : routePath === "/embed"
+            ? EmbedTagger
+            : routePath.startsWith("/s/")
+              ? TaggerSession
+              : App;
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
