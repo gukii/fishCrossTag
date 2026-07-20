@@ -9,6 +9,7 @@ import {
   Minus,
   PanelBottomClose,
   PanelBottomOpen,
+  PencilLine,
   Plus,
   RotateCcw,
   Settings,
@@ -775,6 +776,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   const [tags, setTags] = useState<KoiTag[]>([]);
   const [activeTagId, setActiveTagId] = useState<string | null>(null);
   const [editingTagId, setEditingTagId] = useState<string | null>(null);
+  const [lineEditingTagId, setLineEditingTagId] = useState<string | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -789,6 +791,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
 
   const activeTag = tags.find((tag) => tag.id === activeTagId) ?? null;
   const editingTag = tags.find((tag) => tag.id === editingTagId) ?? null;
+  const lineEditing = Boolean(editingTag && lineEditingTagId === editingTag.id);
   const activeStroke = drag?.type === "stroke" ? drag.points : [];
   const activeDisplayBox = editingTag?.bbox;
   const activeOrientedPoints = editingTag && image ? orientedCorrectedBoxPoints(editingTag, image) : null;
@@ -925,6 +928,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       setTags([]);
       setActiveTagId(null);
       setEditingTagId(null);
+      setLineEditingTagId(null);
       setDrag(null);
       setDrawerOpen(true);
       setEditTarget("auto");
@@ -973,6 +977,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   }
 
   function isPointNearActiveHarness(point: Point) {
+    if (lineEditing) return false;
     if (!activeOrientedPoints) return false;
 
     const screenPoint = imagePointToScreen(point);
@@ -1679,6 +1684,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         ]);
         setActiveTagId(id);
         setEditingTagId(null);
+        setLineEditingTagId(null);
         setEditTarget("auto");
         return;
       }
@@ -1701,6 +1707,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         ),
       );
       setEditingTagId(null);
+      setLineEditingTagId(null);
       setFinDeleteTagId(activeTag.id);
       return;
     }
@@ -1720,6 +1727,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     ]);
     setActiveTagId(id);
     setEditingTagId(null);
+    setLineEditingTagId(null);
     setEditTarget("auto");
   }
 
@@ -1734,6 +1742,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const startPoint = isPolygonEdit ? rotateImagePoint(point, correctionCenter(tag), frameCorrectionRotation(tag, image), image) : point;
     setActiveTagId(tagId);
     setEditingTagId(tagId);
+    setLineEditingTagId(null);
     setShowOriginalTagId(null);
     setDrag({ type: "bbox", pointerId: event.pointerId, tagId, handle, startBox, startPoint });
   }
@@ -1750,6 +1759,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const startBox = sourceCorrectedBox(tag, image, frameCorrectionRotation(tag, image));
     setActiveTagId(tagId);
     setEditingTagId(tagId);
+    setLineEditingTagId(null);
     setShowOriginalTagId(null);
     updateTagCorrection(tagId, {
       polygonBox: startBox,
@@ -1770,14 +1780,8 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     if (mode === "move") return;
     if (tagId !== editingTagId || !(event.target as HTMLElement).closest(".bbox-move-handle")) return;
     event.stopPropagation();
-    const point = pointFromPointer(event, { clampToImage: false });
-    const tag = tags.find((current) => current.id === tagId);
-    if (!point || !tag) return;
-    const isPolygonEdit = tag.id === editingTagId && image;
-    const startBox = isPolygonEdit ? correctedGeometry(tag, image).correctedBox : tag.bbox;
-    const startPoint = isPolygonEdit ? rotateImagePoint(point, correctionCenter(tag), frameCorrectionRotation(tag, image), image) : point;
+    setLineEditingTagId(tagId);
     setShowOriginalTagId(null);
-    setDrag({ type: "bbox", pointerId: event.pointerId, tagId, handle: "move", startBox, startPoint });
   }
 
   function beginLineEndpointDrag(event: PointerEvent<HTMLSpanElement>, tagId: string, line: "body" | "fin", endpoint: "start" | "end") {
@@ -1785,9 +1789,15 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     event.stopPropagation();
     setActiveTagId(tagId);
     setEditingTagId(tagId);
+    setLineEditingTagId(tagId);
     setShowOriginalTagId(null);
     setFinDeleteTagId(null);
     setDrag({ type: "lineEndpoint", pointerId: event.pointerId, tagId, line, endpoint });
+  }
+
+  function toggleLineEditing() {
+    if (!editingTag) return;
+    setLineEditingTagId((current) => (current === editingTag.id ? null : editingTag.id));
   }
 
   function finishTag() {
@@ -1797,6 +1807,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     );
     setActiveTagId(null);
     setEditingTagId(null);
+    setLineEditingTagId(null);
     setShowOriginalTagId(null);
     setDrawerOpen(true);
     setEditTarget("auto");
@@ -1837,11 +1848,13 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     if (activeTagId === tagId) {
       setActiveTagId(null);
       setEditingTagId(null);
+      setLineEditingTagId(null);
       setShowOriginalTagId(null);
       setEditTarget("auto");
     }
     if (editingTagId === tagId) {
       setEditingTagId(null);
+      setLineEditingTagId(null);
     }
   }
 
@@ -1861,6 +1874,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     }
     setActiveTagId(tagId);
     setEditingTagId(tagId);
+    setLineEditingTagId(null);
     setShowOriginalTagId(null);
     setEditTarget("auto");
     setFinDeleteTagId(null);
@@ -1880,6 +1894,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     if (activeTagId === tagId) {
       setActiveTagId(null);
       setEditingTagId(null);
+      setLineEditingTagId(null);
       setShowOriginalTagId(null);
       setEditTarget("auto");
       setFinDeleteTagId(null);
@@ -1889,6 +1904,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const tag = tags.find((current) => current.id === tagId);
     setActiveTagId(tagId);
     setEditingTagId(tagId);
+    setLineEditingTagId(null);
     setShowOriginalTagId(tagId);
     setEditTarget("auto");
     setFinDeleteTagId(null);
@@ -1946,7 +1962,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                     <g key={tag.id} className={tag.id === activeTagId ? "selected" : ""}>
                       <path d={pathFromPoints(tag.bodyLine)} className="body-line" />
                       {tag.finLine && <path d={pathFromPoints(tag.finLine)} className="fin-line" />}
-                      {image && tag.id === editingTagId && (
+                      {image && tag.id === editingTagId && !lineEditing && (
                         <polygon className="oriented-bbox" points={polygonPoints(orientedCorrectedBoxPoints(tag, image))} />
                       )}
                       {tag.id !== editingTagId && (
@@ -1968,7 +1984,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                   )}
                 </svg>
 
-                {editingTag && activeOrientedPoints && (
+                {editingTag && activeOrientedPoints && !lineEditing && (
                   <>
                     <span
                       className="bbox-move-handle"
@@ -2004,7 +2020,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                   </>
                 )}
 
-                {editingTag && (
+                {editingTag && lineEditing && (
                   <>
                     <span
                       className="line-endpoint-handle body-start"
@@ -2090,6 +2106,15 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                     <Button size="sm" onPointerDown={(event) => event.stopPropagation()} onClick={finishTag}>
                       <Check size={16} />
                       OK
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={lineEditing ? "default" : "secondary"}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={toggleLineEditing}
+                      aria-label={lineEditing ? "Turn off line editing" : "Edit fish lines"}
+                    >
+                      <PencilLine size={16} />
                     </Button>
                     <Button
                       size="sm"
