@@ -1270,7 +1270,6 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   function serializeTag(tag: KoiTag): TaggerAnnotationResult | null {
     if (!image) return null;
     const geometry = correctedGeometry(tag, image);
-    const crop = displayCrop(tag, image, geometry.correctedBox, cropSettings);
     const annotation = {
       fishId: tag.id,
       bodyLine: tag.bodyLine,
@@ -1278,7 +1277,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       finMode: deriveFinMode({ bodyLine: tag.bodyLine, finLine: tag.finLine }),
       finMetrics: deriveFinMetrics(tag, image),
       correctedBox: geometry.correctedBox,
-      cropBox: crop,
+      cropBox: geometry.correctedBox,
       cropInference: deriveCropInference(tag, image),
       rotationDeg: geometry.rotation,
       rotationPivot: correctionCenter(tag),
