@@ -9,6 +9,7 @@ import {
   Minus,
   PanelBottomClose,
   PanelBottomOpen,
+  PencilLine,
   Plus,
   RotateCcw,
   Settings,
@@ -18,12 +19,13 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
-import { deriveAnnotationBuckets, deriveFinMode, TaggerAnnotationResult, TaggerCompletePayload } from "./workflow";
+import { CropInference, deriveAnnotationBuckets, deriveFinMode, FinMetrics, TaggerAnnotationResult, TaggerCompletePayload } from "./workflow";
 
 type Mode = "tag" | "move";
 type PaintMode = "direct" | "crosshair";
 type Handle = "nw" | "ne" | "sw" | "se" | "move";
 type EditTarget = "auto" | "body" | "fin";
+type LineEndpointRef = { tagId: string; line: "body" | "fin"; endpoint: "start" | "end"; point: Point };
 
 type Point = {
   x: number;
@@ -55,9 +57,9 @@ type KoiTag = {
   bodyLine: Point[];
   finLine?: Point[];
   bbox: Box;
-  correctedBBox?: Box;
-  correctedBBoxEdited?: boolean;
-  correctionRotationDeg?: number;
+  polygonBox?: Box;
+  polygonBoxEdited?: boolean;
+  manualRotationDeltaDeg?: number;
   correctedPoints?: Point[];
   status: "active" | "done";
   createdAt: string;
@@ -78,12 +80,14 @@ type AppProps = {
   sessionMode?: boolean;
   metadata?: Record<string, unknown>;
   onSessionComplete?: (payload: TaggerCompletePayload) => void | Promise<void>;
+  persistLocalSettings?: boolean;
 };
 
 type DragState =
   | { type: "stroke"; pointerId: number; points: Point[]; source: "direct" | "crosshair" }
   | { type: "bbox"; pointerId: number; tagId: string; handle: Handle; startBox: Box; startPoint: Point }
   | { type: "rotate"; pointerId: number; tagId: string; startAngle: number; startRotation: number; center: Point }
+  | (LineEndpointRef & { type: "lineEndpoint"; pointerId: number; startPoint: Point; startPointer: Point; moved: boolean })
   | { type: "finishTap"; pointerId: number; tagId: string; startPoint: Point; moved: boolean };
 
 type GestureState = {
@@ -146,6 +150,13 @@ if (import.meta.hot) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+function clampPoint(point: Point): Point {
+  return {
+    x: clamp(point.x, 0, 1),
+    y: clamp(point.y, 0, 1),
+  };
 }
 
 function cropRectPx(crop: Box, innerBox: Box, image: ImageInfo) {
@@ -291,6 +302,128 @@ function segmentDistance(a: Point, b: Point, c: Point, d: Point) {
   return Math.min(pointSegmentDistance(a, c, d), pointSegmentDistance(b, c, d), pointSegmentDistance(c, a, b), pointSegmentDistance(d, a, b));
 }
 
+function pathLengthPx(points: Point[], image: ImageInfo) {
+  return points.slice(1).reduce((sum, point, index) => {
+    const previous = points[index];
+    return sum + Math.hypot((point.x - previous.x) * image.width, (point.y - previous.y) * image.height);
+  }, 0);
+}
+
+function nearestMainLineInfo(point: Point, bodyLine: Point[], image: ImageInfo) {
+  let best:
+    | {
+        distancePx: number;
+        segmentStart: Point;
+        segmentEnd: Point;
+        sideValue: number;
+      }
+    | null = null;
+
+  for (let index = 1; index < bodyLine.length; index += 1) {
+    const start = bodyLine[index - 1];
+    const end = bodyLine[index];
+    const dx = (end.x - start.x) * image.width;
+    const dy = (end.y - start.y) * image.height;
+    const px = (point.x - start.x) * image.width;
+    const py = (point.y - start.y) * image.height;
+    const lengthSq = dx * dx + dy * dy;
+    const t = lengthSq === 0 ? 0 : clamp((px * dx + py * dy) / lengthSq, 0, 1);
+    const projectedX = start.x * image.width + dx * t;
+    const projectedY = start.y * image.height + dy * t;
+    const pointX = point.x * image.width;
+    const pointY = point.y * image.height;
+    const distancePx = Math.hypot(pointX - projectedX, pointY - projectedY);
+    const sideValue = dx * py - dy * px;
+
+    if (!best || distancePx < best.distancePx) {
+      best = { distancePx, segmentStart: start, segmentEnd: end, sideValue };
+    }
+  }
+
+  return best;
+}
+
+function angleBetweenLinesDeg(line: Point[], bodyStart: Point, bodyEnd: Point, image: ImageInfo) {
+  const first = line[0];
+  const last = line[line.length - 1];
+  if (!first || !last) return 0;
+  const finX = (last.x - first.x) * image.width;
+  const finY = (last.y - first.y) * image.height;
+  const bodyX = (bodyEnd.x - bodyStart.x) * image.width;
+  const bodyY = (bodyEnd.y - bodyStart.y) * image.height;
+  const finLength = Math.hypot(finX, finY);
+  const bodyLength = Math.hypot(bodyX, bodyY);
+  if (finLength <= 0.000001 || bodyLength <= 0.000001) return 0;
+  const dot = Math.abs((finX * bodyX + finY * bodyY) / (finLength * bodyLength));
+  return (Math.acos(clamp(dot, -1, 1)) * 180) / Math.PI;
+}
+
+function deriveFinMetrics(tag: KoiTag, image: ImageInfo): FinMetrics | undefined {
+  const finLine = tag.finLine;
+  if (!finLine || finLine.length < 2 || tag.bodyLine.length < 2) return undefined;
+
+  const crossesMainLine = strokesIntersect(tag.bodyLine, finLine, 0.01);
+  const pointInfos = finLine
+    .map((point) => ({ point, info: nearestMainLineInfo(point, tag.bodyLine, image) }))
+    .filter((item): item is { point: Point; info: NonNullable<ReturnType<typeof nearestMainLineInfo>> } => Boolean(item.info));
+  if (!pointInfos.length) return undefined;
+
+  const sideValues = pointInfos.map((item) => item.info.sideValue);
+  const hasLeft = sideValues.some((value) => value > 0.000001);
+  const hasRight = sideValues.some((value) => value < -0.000001);
+  const minDistancePx = Math.min(...pointInfos.map((item) => item.info.distancePx));
+  const relationToBody = crossesMainLine
+    ? "crosses-main-line"
+    : minDistancePx <= Math.max(16, bodyLengthPx(tag, image) * 0.045)
+      ? "one-sided-attached"
+      : minDistancePx <= Math.max(42, bodyLengthPx(tag, image) * 0.12)
+        ? "near-body-detached"
+        : "unclear";
+
+  const buildSide = (sideValue: 1 | -1) => {
+    const sidePoints = pointInfos.filter((item) => (sideValue > 0 ? item.info.sideValue >= -0.000001 : item.info.sideValue <= 0.000001));
+    if (!sidePoints.length) return null;
+    const sideLine = sidePoints.map((item) => item.point);
+    const middleInfo = sidePoints[Math.floor(sidePoints.length / 2)].info;
+    const sideDistancePx = Math.min(...sidePoints.map((item) => item.info.distancePx));
+    const sideReachPx = Math.max(...sidePoints.map((item) => item.info.distancePx));
+    return {
+      side: sideValue > 0 ? "main-line-left" : "main-line-right",
+      line: sideLine,
+      angleDeg: angleBetweenLinesDeg(sideLine, middleInfo.segmentStart, middleInfo.segmentEnd, image),
+      lengthPx: Math.max(pathLengthPx(sideLine, image), sideReachPx),
+      distanceToMainLinePx: sideDistancePx,
+      visible: true,
+    } as const;
+  };
+
+  const sides = [hasLeft ? buildSide(1) : null, hasRight ? buildSide(-1) : null].filter((side): side is NonNullable<ReturnType<typeof buildSide>> => Boolean(side));
+
+  return {
+    relationToBody,
+    sides,
+    crossesMainLine,
+  };
+}
+
+function isFinStrokeForTag(tag: KoiTag, stroke: Point[], image: ImageInfo | null) {
+  if (strokesIntersect(tag.bodyLine, stroke)) return true;
+  if (!image) return false;
+  const metrics = deriveFinMetrics({ ...tag, finLine: stroke }, image);
+  return metrics?.relationToBody === "one-sided-attached" || metrics?.relationToBody === "near-body-detached";
+}
+
+function deriveCropInference(tag: KoiTag, image: ImageInfo): CropInference {
+  const metrics = deriveFinMetrics(tag, image);
+  if (!metrics?.sides.length) {
+    return { mirroredFinWidth: false, source: "body-only" };
+  }
+  if (!metrics.crossesMainLine && metrics.sides.length === 1 && (metrics.relationToBody === "one-sided-attached" || metrics.relationToBody === "near-body-detached")) {
+    return { mirroredFinWidth: true, source: "one-sided-fin" };
+  }
+  return { mirroredFinWidth: false, source: "two-sided-fin" };
+}
+
 function segmentIntersects(a: Point, b: Point, c: Point, d: Point) {
   const cross = (p: Point, q: Point, r: Point) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
   const onSegment = (p: Point, q: Point, r: Point) =>
@@ -335,7 +468,7 @@ function orderedBoxCorners(box: Box): Point[] {
 }
 
 function correctionCenter(tag: KoiTag): Point {
-  return tag.bodyLine[0];
+  return boxCenter(tag.bbox);
 }
 
 function boxFromPointsWithMargin(points: Point[], marginX: number, marginY: number): Box {
@@ -395,6 +528,36 @@ function simplifyStroke(points: Point[]) {
   return kept;
 }
 
+function smoothEditedEndpoint(points: Point[], endpoint: "start" | "end", point: Point) {
+  if (points.length < 3) {
+    const next = [...points];
+    next[endpoint === "start" ? 0 : next.length - 1] = point;
+    return next;
+  }
+
+  const next = [...points];
+  const endpointIndex = endpoint === "start" ? 0 : points.length - 1;
+  const original = points[endpointIndex];
+  const delta = {
+    x: point.x - original.x,
+    y: point.y - original.y,
+  };
+  const influenceCount = Math.max(3, Math.ceil(points.length * 0.78));
+
+  for (let offset = 0; offset < influenceCount; offset += 1) {
+    const index = endpoint === "start" ? offset : points.length - 1 - offset;
+    const amount = 1 - offset / Math.max(1, influenceCount - 1);
+    const weight = 0.18 + 0.82 * amount;
+    next[index] = clampPoint({
+      x: points[index].x + delta.x * weight,
+      y: points[index].y + delta.y * weight,
+    });
+  }
+
+  next[endpointIndex] = point;
+  return next;
+}
+
 function pathFromPoints(points: Point[]) {
   return points
     .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x * 1000} ${point.y * 1000}`)
@@ -439,6 +602,34 @@ function verticalLineRotation(points: Point[], image?: ImageInfo) {
   const dx = image ? (head.x - tail.x) * image.width : head.x - tail.x;
   const dy = image ? (head.y - tail.y) * image.height : head.y - tail.y;
   const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  return 90 - angle;
+}
+
+function headWeightedLineRotation(points: Point[], image?: ImageInfo) {
+  if (points.length < 3) return verticalLineRotation(points, image);
+
+  let weightedX = 0;
+  let weightedY = 0;
+  let totalWeight = 0;
+  const lastSegmentIndex = Math.max(1, points.length - 2);
+
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1];
+    const current = points[index];
+    const dx = image ? (previous.x - current.x) * image.width : previous.x - current.x;
+    const dy = image ? (previous.y - current.y) * image.height : previous.y - current.y;
+    const length = Math.hypot(dx, dy);
+    if (length <= 0.000001) continue;
+
+    const headBias = 1 - (index - 1) / lastSegmentIndex;
+    const weight = length * (0.25 + headBias * headBias * 1.75);
+    weightedX += (dx / length) * weight;
+    weightedY += (dy / length) * weight;
+    totalWeight += weight;
+  }
+
+  if (totalWeight <= 0) return verticalLineRotation(points, image);
+  const angle = (Math.atan2(weightedY, weightedX) * 180) / Math.PI;
   return 90 - angle;
 }
 
@@ -488,8 +679,20 @@ function polygonPoints(points: Point[]) {
   return points.map((point) => `${point.x * 1000},${point.y * 1000}`).join(" ");
 }
 
-function correctionRotation(tag: KoiTag, image: ImageInfo) {
-  return tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image);
+function baseCorrectionRotation(tag: KoiTag, image: ImageInfo) {
+  return headWeightedLineRotation(tag.bodyLine, image);
+}
+
+function manualRotationDelta(tag: KoiTag) {
+  return tag.manualRotationDeltaDeg ?? 0;
+}
+
+function frameCorrectionRotation(tag: KoiTag, image: ImageInfo) {
+  return baseCorrectionRotation(tag, image) - manualRotationDelta(tag);
+}
+
+function cropCorrectionRotation(tag: KoiTag, image: ImageInfo) {
+  return baseCorrectionRotation(tag, image) + manualRotationDelta(tag);
 }
 
 function bodyLengthPx(tag: KoiTag, image: ImageInfo) {
@@ -498,16 +701,43 @@ function bodyLengthPx(tag: KoiTag, image: ImageInfo) {
   return Math.max(40, Math.hypot((head.x - tail.x) * image.width, (head.y - tail.y) * image.height));
 }
 
-function rotatedAnnotationPoints(tag: KoiTag, image: ImageInfo, rotation = correctionRotation(tag, image)) {
+function rotatedAnnotationPoints(tag: KoiTag, image: ImageInfo, rotation = frameCorrectionRotation(tag, image)) {
   const center = correctionCenter(tag);
   const sourcePoints = tag.finLine ? [...tag.bodyLine, ...tag.finLine] : tag.bodyLine;
   return sourcePoints.map((point) => rotateImagePoint(point, center, rotation, image));
 }
 
-function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = correctionRotation(tag, image)) {
-  if (tag.correctedBBoxEdited && tag.correctedBBox) return tag.correctedBBox;
+function mirroredOneSidedFinCropPoints(tag: KoiTag, image: ImageInfo, rotation: number) {
+  if (!tag.finLine || tag.finLine.length < 2) return [];
+  const metrics = deriveFinMetrics(tag, image);
+  if (!metrics || metrics.crossesMainLine || metrics.sides.length !== 1) return [];
+  if (metrics.relationToBody !== "one-sided-attached" && metrics.relationToBody !== "near-body-detached") return [];
 
-  const rotatedPoints = rotatedAnnotationPoints(tag, image, rotation);
+  const center = correctionCenter(tag);
+  const rotatedBody = tag.bodyLine.map((point) => rotateImagePoint(point, center, rotation, image));
+  const rotatedFin = tag.finLine.map((point) => rotateImagePoint(point, center, rotation, image));
+  const bodyCenterX = polygonCenter(rotatedBody).x;
+  const finDistances = rotatedFin.map((point) => point.x - bodyCenterX);
+  const reachesRight = Math.max(...finDistances) > Math.abs(Math.min(...finDistances));
+  const visibleReach = reachesRight ? Math.max(...finDistances) : Math.abs(Math.min(...finDistances));
+  if (visibleReach <= 0.000001) return [];
+
+  const mirroredX = bodyCenterX + (reachesRight ? -visibleReach : visibleReach);
+  const minY = Math.min(...rotatedFin.map((point) => point.y), ...rotatedBody.map((point) => point.y));
+  const maxY = Math.max(...rotatedFin.map((point) => point.y), ...rotatedBody.map((point) => point.y));
+  const midY = rotatedFin.reduce((sum, point) => sum + point.y, 0) / rotatedFin.length;
+
+  return [
+    { x: mirroredX, y: midY },
+    { x: mirroredX, y: minY },
+    { x: mirroredX, y: maxY },
+  ];
+}
+
+function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = frameCorrectionRotation(tag, image)) {
+  if (tag.polygonBoxEdited && tag.polygonBox) return tag.polygonBox;
+
+  const rotatedPoints = [...rotatedAnnotationPoints(tag, image, rotation), ...mirroredOneSidedFinCropPoints(tag, image, rotation)];
   const fallbackMarginPx = tag.finLine ? 1 : bodyLengthPx(tag, image) * 0.04;
   const strokeSafeMarginPx = Math.max(fallbackMarginPx, CORRECTED_BOX_STROKE_MARGIN_PX);
   return boxFromPointsWithMargin(rotatedPoints, strokeSafeMarginPx / image.width, strokeSafeMarginPx / image.height);
@@ -520,7 +750,7 @@ function displayCrop(tag: KoiTag, image: ImageInfo, correctedBox: Box, settings:
 }
 
 function orientedCorrectedBoxPoints(tag: KoiTag, image: ImageInfo) {
-  const rotation = correctionRotation(tag, image);
+  const rotation = frameCorrectionRotation(tag, image);
   const center = correctionCenter(tag);
   return orderedBoxCorners(sourceCorrectedBox(tag, image, rotation)).map((point) => rotateImagePoint(point, center, -rotation, image));
 }
@@ -539,8 +769,8 @@ function controlPosition(box: Box, viewScale = 1) {
 }
 
 function correctedGeometry(tag: KoiTag, image: ImageInfo): CorrectedGeometry {
-  const rotation = correctionRotation(tag, image);
-  const correctedBox = sourceCorrectedBox(tag, image, rotation);
+  const rotation = cropCorrectionRotation(tag, image);
+  const correctedBox = sourceCorrectedBox(tag, image, frameCorrectionRotation(tag, image));
 
   return {
     rotation,
@@ -548,7 +778,7 @@ function correctedGeometry(tag: KoiTag, image: ImageInfo): CorrectedGeometry {
   };
 }
 
-function coverImageFrame(image: ImageInfo, stage: PixelRect): PixelRect {
+function containImageFrame(image: ImageInfo, stage: PixelRect): PixelRect {
   if (stage.width <= 0 || stage.height <= 0) {
     return { x: 0, y: 0, width: 1, height: 1 };
   }
@@ -557,8 +787,8 @@ function coverImageFrame(image: ImageInfo, stage: PixelRect): PixelRect {
   const stageAspect = stage.width / stage.height;
   const frame =
     imageAspect > stageAspect
-      ? { width: stage.height * imageAspect, height: stage.height }
-      : { width: stage.width, height: stage.width / imageAspect };
+      ? { width: stage.width, height: stage.width / imageAspect }
+      : { width: stage.height * imageAspect, height: stage.height };
 
   return {
     x: (stage.width - frame.width) / 2,
@@ -568,7 +798,8 @@ function coverImageFrame(image: ImageInfo, stage: PixelRect): PixelRect {
   };
 }
 
-export default function App({ initialImage, sessionId, sessionMode = false, metadata, onSessionComplete }: AppProps = {}) {
+export default function App({ initialImage, sessionId, sessionMode = false, metadata, onSessionComplete, persistLocalSettings = true }: AppProps = {}) {
+  const embedMode = metadata?.mode === "embed";
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageTransformRef = useRef<HTMLDivElement | null>(null);
   const sourceImageRef = useRef<HTMLImageElement | null>(null);
@@ -585,11 +816,13 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   const [tags, setTags] = useState<KoiTag[]>([]);
   const [activeTagId, setActiveTagId] = useState<string | null>(null);
   const [editingTagId, setEditingTagId] = useState<string | null>(null);
+  const [lineEditingTagId, setLineEditingTagId] = useState<string | null>(null);
+  const [lineEndpointSelection, setLineEndpointSelection] = useState<LineEndpointRef | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [cropSettings, setCropSettings] = useState<CropSettings>(() => loadCropSettings());
-  const [crosshairOffsetInput, setCrosshairOffsetInput] = useState(() => String(loadCropSettings().crosshairOffsetPx));
+  const [cropSettings, setCropSettings] = useState<CropSettings>(() => (persistLocalSettings ? loadCropSettings() : DEFAULT_CROP_SETTINGS));
+  const [crosshairOffsetInput, setCrosshairOffsetInput] = useState(() => String((persistLocalSettings ? loadCropSettings() : DEFAULT_CROP_SETTINGS).crosshairOffsetPx));
   const [showCrosshairIntro, setShowCrosshairIntro] = useState(false);
   const [finDeleteTagId, setFinDeleteTagId] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<EditTarget>("auto");
@@ -599,18 +832,28 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
 
   const activeTag = tags.find((tag) => tag.id === activeTagId) ?? null;
   const editingTag = tags.find((tag) => tag.id === editingTagId) ?? null;
+  const lineEditing = Boolean(editingTag && lineEditingTagId === editingTag.id);
   const activeStroke = drag?.type === "stroke" ? drag.points : [];
   const activeDisplayBox = editingTag?.bbox;
-  const activeOrientedPoints = editingTag && image && editingTag.correctionRotationDeg != null ? orientedCorrectedBoxPoints(editingTag, image) : null;
-  const imageFrame = image ? coverImageFrame(image, stageSize) : null;
+  const activeOrientedPoints = editingTag && image ? orientedCorrectedBoxPoints(editingTag, image) : null;
+  const activeLineEndpointDrag = drag?.type === "lineEndpoint" ? drag : null;
+  const activeLineEndpointTarget = activeLineEndpointDrag ?? lineEndpointSelection;
+  const activeHeadEndpointEdit =
+    lineEditing &&
+    activeLineEndpointTarget?.line === "body" &&
+    activeLineEndpointTarget.endpoint === "start"
+      ? activeLineEndpointTarget
+      : null;
+  const imageFrame = image ? containImageFrame(image, stageSize) : null;
 
   useEffect(() => {
     viewRef.current = view;
   }, [view]);
 
   useEffect(() => {
+    if (!persistLocalSettings) return;
     localStorage.setItem(CROP_SETTINGS_KEY, JSON.stringify(cropSettings));
-  }, [cropSettings]);
+  }, [cropSettings, persistLocalSettings]);
 
   useEffect(() => {
     setCrosshairOffsetInput(String(cropSettings.crosshairOffsetPx));
@@ -644,6 +887,16 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   useEffect(() => {
     if (initialImage) {
       setImage(initialImage);
+      setTags([]);
+      setActiveTagId(null);
+      setEditingTagId(null);
+      setLineEditingTagId(null);
+      setLineEndpointSelection(null);
+      setDrag(null);
+      setDrawerOpen(true);
+      setEditTarget("auto");
+      setFinDeleteTagId(null);
+      setView({ scale: 1, x: 0, y: 0 });
       return;
     }
     const probe = new Image();
@@ -682,24 +935,39 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   }, [image]);
 
   useEffect(() => {
-    if (!drag || (drag.type !== "bbox" && drag.type !== "rotate")) return;
+    if (!drag || (drag.type !== "bbox" && drag.type !== "rotate" && drag.type !== "lineEndpoint")) return;
 
     function move(event: globalThis.PointerEvent) {
-      const point = pointFromClient(event.clientX, event.clientY, { clampToImage: false });
+      const point = pointFromClient(event.clientX, event.clientY, { clampToImage: drag.type === "lineEndpoint" });
       if (!point) return;
       if (drag.type === "bbox") {
         updateBboxDrag(drag, point);
         return;
       }
+      if (drag.type === "lineEndpoint") {
+        const targetPoint = clampPoint({
+          x: drag.startPoint.x + point.x - drag.startPointer.x,
+          y: drag.startPoint.y + point.y - drag.startPointer.y,
+        });
+        setDrag({
+          ...drag,
+          point: targetPoint,
+          moved: drag.moved || Math.hypot(point.x - drag.startPointer.x, point.y - drag.startPointer.y) > 0.006,
+        });
+        return;
+      }
 
       const angle = pointerAngle(point, drag.center, image ?? undefined);
       updateTagCorrection(drag.tagId, {
-        correctionRotationDeg: drag.startRotation + angle - drag.startAngle,
+        manualRotationDeltaDeg: drag.startRotation + angle - drag.startAngle,
       });
     }
 
     function finish(event: globalThis.PointerEvent) {
       if (event.pointerId === drag.pointerId) {
+        if (drag.type === "lineEndpoint") {
+          completeLineEndpointDrag(drag, drag.point);
+        }
         setDrag(null);
       }
     }
@@ -731,6 +999,8 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       setTags([]);
       setActiveTagId(null);
       setEditingTagId(null);
+      setLineEditingTagId(null);
+      setLineEndpointSelection(null);
       setDrag(null);
       setDrawerOpen(true);
       setEditTarget("auto");
@@ -779,6 +1049,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   }
 
   function isPointNearActiveHarness(point: Point) {
+    if (lineEditing) return false;
     if (!activeOrientedPoints) return false;
 
     const screenPoint = imagePointToScreen(point);
@@ -1004,7 +1275,12 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       bodyLine: tag.bodyLine,
       finLine: tag.finLine,
       finMode: deriveFinMode({ bodyLine: tag.bodyLine, finLine: tag.finLine }),
+      finMetrics: deriveFinMetrics(tag, image),
       correctedBox: geometry.correctedBox,
+      cropBox: geometry.correctedBox,
+      cropInference: deriveCropInference(tag, image),
+      rotationDeg: geometry.rotation,
+      rotationPivot: correctionCenter(tag),
       correctedPolygon: orientedCorrectedBoxPoints(tag, image),
       imageWidth: image.width,
       imageHeight: image.height,
@@ -1116,7 +1392,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const availableHeight = Math.max(80, visibleHeight - screenPadding * 2);
     const focusedTag: KoiTag = {
       ...tag,
-      correctionRotationDeg: tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image),
+      manualRotationDeltaDeg: tag.manualRotationDeltaDeg ?? 0,
     };
     const focusBox = boxFromPointsWithMargin(orientedCorrectedBoxPoints(focusedTag, image), 0, 0);
     const targetScale = Math.min(
@@ -1289,6 +1565,19 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       return;
     }
 
+    if (drag.type === "lineEndpoint") {
+      const targetPoint = clampPoint({
+        x: drag.startPoint.x + point.x - drag.startPointer.x,
+        y: drag.startPoint.y + point.y - drag.startPointer.y,
+      });
+      setDrag({
+        ...drag,
+        point: targetPoint,
+        moved: drag.moved || Math.hypot(point.x - drag.startPointer.x, point.y - drag.startPointer.y) > 0.006,
+      });
+      return;
+    }
+
     if (drag.type === "stroke") {
       setDrag({ ...drag, points: [...drag.points, point] });
       return;
@@ -1299,14 +1588,57 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     }
   }
 
+  function commitLineEndpointDrag(activeDrag: Extract<DragState, { type: "lineEndpoint" }>, point: Point) {
+    setTags((current) =>
+      current.map((tag) => {
+        if (tag.id !== activeDrag.tagId) return tag;
+        const bodyLine = [...tag.bodyLine];
+        const finLine = tag.finLine ? [...tag.finLine] : undefined;
+        const targetLine = activeDrag.line === "body" ? bodyLine : finLine;
+        if (!targetLine?.length) return tag;
+        const smoothedLine = smoothEditedEndpoint(targetLine, activeDrag.endpoint, point);
+        const nextBodyLine = activeDrag.line === "body" ? smoothedLine : bodyLine;
+        const nextFinLine = activeDrag.line === "fin" ? smoothedLine : finLine;
+        const bboxPoints = nextFinLine ? [...nextBodyLine, ...nextFinLine] : nextBodyLine;
+
+        return {
+          ...tag,
+          bodyLine: nextBodyLine,
+          finLine: nextFinLine,
+          bbox: boxFromPoints(bboxPoints),
+          polygonBox: undefined,
+          polygonBoxEdited: false,
+          correctedPoints: undefined,
+          manualRotationDeltaDeg: undefined,
+          lastPaintedAt: new Date().toISOString(),
+        };
+      }),
+    );
+  }
+
+  function completeLineEndpointDrag(activeDrag: Extract<DragState, { type: "lineEndpoint" }>, point: Point) {
+    const moved = activeDrag.moved || Math.hypot(point.x - activeDrag.startPoint.x, point.y - activeDrag.startPoint.y) > 0.006;
+    if (!moved) {
+      setLineEndpointSelection(null);
+      return;
+    }
+    commitLineEndpointDrag(activeDrag, point);
+    setLineEndpointSelection({
+      tagId: activeDrag.tagId,
+      line: activeDrag.line,
+      endpoint: activeDrag.endpoint,
+      point,
+    });
+  }
+
   function updateBboxDrag(activeDrag: Extract<DragState, { type: "bbox" }>, point: Point) {
     setTags((current) =>
       current.map((tag) => {
         if (tag.id !== activeDrag.tagId) return tag;
-        const targetKey: "bbox" | "correctedBBox" = tag.correctionRotationDeg == null ? "bbox" : "correctedBBox";
-        const correctedEditPatch = targetKey === "correctedBBox" ? { correctedBBoxEdited: true } : {};
-        const normalizeTargetBox = targetKey === "correctedBBox" ? normalizeFreeBox : normalizeBox;
-        const dragPoint = targetKey === "correctedBBox" && image ? rotateImagePoint(point, correctionCenter(tag), correctionRotation(tag, image), image) : point;
+        const targetKey: "bbox" | "polygonBox" = tag.id === editingTagId && image ? "polygonBox" : "bbox";
+        const correctedEditPatch = targetKey === "polygonBox" ? { polygonBoxEdited: true } : {};
+        const normalizeTargetBox = targetKey === "polygonBox" ? normalizeFreeBox : normalizeBox;
+        const dragPoint = targetKey === "polygonBox" && image ? rotateImagePoint(point, correctionCenter(tag), frameCorrectionRotation(tag, image), image) : point;
 
         if (activeDrag.handle === "move") {
           return {
@@ -1352,6 +1684,12 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       return;
     }
 
+    if (drag.type === "lineEndpoint") {
+      completeLineEndpointDrag(drag, drag.point);
+      setDrag(null);
+      return;
+    }
+
     if (drag.type === "finishTap") {
       const tagStillActive = activeTag?.id === drag.tagId;
       if (!drag.moved && tagStillActive) {
@@ -1375,10 +1713,10 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
             ...tag,
             bodyLine: stroke,
             bbox: boxFromPoints(points),
-            correctedBBox: undefined,
-            correctedBBoxEdited: false,
+            polygonBox: undefined,
+            polygonBoxEdited: false,
             correctedPoints: undefined,
-            correctionRotationDeg: undefined,
+            manualRotationDeltaDeg: undefined,
             lastPaintedAt: paintedAt,
           };
         }),
@@ -1398,10 +1736,10 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 ...tag,
                 finLine: stroke,
                 bbox: expandBoxToPoints(tag.bbox, stroke),
-                correctedBBox: undefined,
-                correctedBBoxEdited: false,
+                polygonBox: undefined,
+                polygonBoxEdited: false,
                 correctedPoints: undefined,
-                correctionRotationDeg: undefined,
+                manualRotationDeltaDeg: undefined,
                 lastPaintedAt: paintedAt,
               }
             : tag,
@@ -1415,7 +1753,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
 
     if (activeTag) {
       const now = new Date();
-      const isFinLine = strokesIntersect(activeTag.bodyLine, stroke);
+      const isFinLine = isFinStrokeForTag(activeTag, stroke, image);
 
       if (!isFinLine) {
         const id = crypto.randomUUID();
@@ -1441,6 +1779,8 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         ]);
         setActiveTagId(id);
         setEditingTagId(null);
+        setLineEditingTagId(null);
+        setLineEndpointSelection(null);
         setEditTarget("auto");
         return;
       }
@@ -1453,16 +1793,18 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 finLine: stroke,
                 bbox: expandBoxToPoints(tag.bbox, stroke),
                 status: "done",
-                correctedBBox: undefined,
-                correctedBBoxEdited: false,
+                polygonBox: undefined,
+                polygonBoxEdited: false,
                 correctedPoints: undefined,
-                correctionRotationDeg: image ? verticalLineRotation(tag.bodyLine, image) : undefined,
+                manualRotationDeltaDeg: undefined,
                 lastPaintedAt: now.toISOString(),
               }
             : tag,
         ),
       );
       setEditingTagId(null);
+      setLineEditingTagId(null);
+      setLineEndpointSelection(null);
       setFinDeleteTagId(activeTag.id);
       return;
     }
@@ -1482,6 +1824,8 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     ]);
     setActiveTagId(id);
     setEditingTagId(null);
+    setLineEditingTagId(null);
+    setLineEndpointSelection(null);
     setEditTarget("auto");
   }
 
@@ -1491,10 +1835,13 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const point = pointFromPointer(event, { clampToImage: false });
     const tag = tags.find((current) => current.id === tagId);
     if (!point || !tag) return;
-    const startBox = tag.correctionRotationDeg == null || !image ? tag.bbox : correctedGeometry(tag, image).correctedBox;
-    const startPoint = tag.correctionRotationDeg == null || !image ? point : rotateImagePoint(point, correctionCenter(tag), correctionRotation(tag, image), image);
+    const isPolygonEdit = tag.id === editingTagId && image;
+    const startBox = isPolygonEdit ? correctedGeometry(tag, image).correctedBox : tag.bbox;
+    const startPoint = isPolygonEdit ? rotateImagePoint(point, correctionCenter(tag), frameCorrectionRotation(tag, image), image) : point;
     setActiveTagId(tagId);
     setEditingTagId(tagId);
+    setLineEditingTagId(null);
+    setLineEndpointSelection(null);
     setShowOriginalTagId(null);
     setDrag({ type: "bbox", pointerId: event.pointerId, tagId, handle, startBox, startPoint });
   }
@@ -1505,13 +1852,19 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const point = pointFromPointer(event, { clampToImage: false });
     const tag = tags.find((current) => current.id === tagId);
     if (!point || !tag || !image) return;
-    const center = correctionCenter(tag);
-    const startRotation = tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image);
+    const currentPolygon = orientedCorrectedBoxPoints(tag, image);
+    const center = polygonCenter(currentPolygon);
+    const startRotation = manualRotationDelta(tag);
+    const startBox = sourceCorrectedBox(tag, image, frameCorrectionRotation(tag, image));
     setActiveTagId(tagId);
     setEditingTagId(tagId);
+    setLineEditingTagId(null);
+    setLineEndpointSelection(null);
     setShowOriginalTagId(null);
     updateTagCorrection(tagId, {
-      correctionRotationDeg: startRotation,
+      polygonBox: startBox,
+      polygonBoxEdited: true,
+      manualRotationDeltaDeg: startRotation,
     });
     setDrag({
       type: "rotate",
@@ -1527,13 +1880,60 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     if (mode === "move") return;
     if (tagId !== editingTagId || !(event.target as HTMLElement).closest(".bbox-move-handle")) return;
     event.stopPropagation();
-    const point = pointFromPointer(event, { clampToImage: false });
-    const tag = tags.find((current) => current.id === tagId);
-    if (!point || !tag) return;
-    const startBox = tag.correctionRotationDeg == null || !image ? tag.bbox : correctedGeometry(tag, image).correctedBox;
-    const startPoint = tag.correctionRotationDeg == null || !image ? point : rotateImagePoint(point, correctionCenter(tag), correctionRotation(tag, image), image);
+    setLineEditingTagId(tagId);
+    setLineEndpointSelection(null);
     setShowOriginalTagId(null);
-    setDrag({ type: "bbox", pointerId: event.pointerId, tagId, handle: "move", startBox, startPoint });
+  }
+
+  function currentLineEndpoint(tagId: string, line: "body" | "fin", endpoint: "start" | "end") {
+    const tag = tags.find((current) => current.id === tagId);
+    const points = line === "body" ? tag?.bodyLine : tag?.finLine;
+    if (!points?.length) return null;
+    return points[endpoint === "start" ? 0 : points.length - 1];
+  }
+
+  function selectLineEndpoint(event: PointerEvent<HTMLSpanElement>, tagId: string, line: "body" | "fin", endpoint: "start" | "end") {
+    if (mode === "move") return;
+    event.stopPropagation();
+    event.preventDefault();
+    const point = currentLineEndpoint(tagId, line, endpoint);
+    if (!point) return;
+    setActiveTagId(tagId);
+    setEditingTagId(tagId);
+    setLineEditingTagId(tagId);
+    setShowOriginalTagId(null);
+    setFinDeleteTagId(null);
+    setLineEndpointSelection({ tagId, line, endpoint, point });
+  }
+
+  function beginLineEndpointTargetDrag(event: PointerEvent<HTMLSpanElement>) {
+    if (mode === "move" || !lineEndpointSelection) return;
+    event.stopPropagation();
+    event.preventDefault();
+    const point = pointFromPointer(event, { clampToImage: true });
+    if (!point) return;
+    setDrag({
+      type: "lineEndpoint",
+      pointerId: event.pointerId,
+      tagId: lineEndpointSelection.tagId,
+      line: lineEndpointSelection.line,
+      endpoint: lineEndpointSelection.endpoint,
+      point: lineEndpointSelection.point,
+      startPoint: lineEndpointSelection.point,
+      startPointer: point,
+      moved: false,
+    });
+  }
+
+  function toggleLineEditing() {
+    if (!editingTag) return;
+    setLineEditingTagId((current) => {
+      if (current === editingTag.id) {
+        setLineEndpointSelection(null);
+        return null;
+      }
+      return editingTag.id;
+    });
   }
 
   function finishTag() {
@@ -1543,6 +1943,8 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     );
     setActiveTagId(null);
     setEditingTagId(null);
+    setLineEditingTagId(null);
+    setLineEndpointSelection(null);
     setShowOriginalTagId(null);
     setDrawerOpen(true);
     setEditTarget("auto");
@@ -1564,10 +1966,10 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
               finLine: undefined,
               bbox: boxFromPoints(tag.bodyLine),
               status: "active",
-              correctedBBox: undefined,
-              correctedBBoxEdited: false,
+              polygonBox: undefined,
+              polygonBoxEdited: false,
               correctedPoints: undefined,
-              correctionRotationDeg: undefined,
+              manualRotationDeltaDeg: undefined,
             }
           : tag,
       ),
@@ -1583,15 +1985,22 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     if (activeTagId === tagId) {
       setActiveTagId(null);
       setEditingTagId(null);
+      setLineEditingTagId(null);
+      setLineEndpointSelection(null);
       setShowOriginalTagId(null);
       setEditTarget("auto");
     }
     if (editingTagId === tagId) {
       setEditingTagId(null);
+      setLineEditingTagId(null);
+      setLineEndpointSelection(null);
     }
   }
 
-  function updateTagCorrection(tagId: string, patch: Partial<Pick<KoiTag, "correctedBBox" | "correctionRotationDeg" | "correctedPoints">>) {
+  function updateTagCorrection(
+    tagId: string,
+    patch: Partial<Pick<KoiTag, "polygonBox" | "polygonBoxEdited" | "manualRotationDeltaDeg" | "correctedPoints">>,
+  ) {
     setTags((current) =>
       current.map((tag) => (tag.id === tagId ? { ...tag, ...patch } : tag)),
     );
@@ -1604,6 +2013,8 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     }
     setActiveTagId(tagId);
     setEditingTagId(tagId);
+    setLineEditingTagId(null);
+    setLineEndpointSelection(null);
     setShowOriginalTagId(null);
     setEditTarget("auto");
     setFinDeleteTagId(null);
@@ -1613,7 +2024,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         return {
           ...tag,
           status: "active",
-          correctionRotationDeg: image ? (tag.correctionRotationDeg ?? verticalLineRotation(tag.bodyLine, image)) : tag.correctionRotationDeg,
+          manualRotationDeltaDeg: tag.manualRotationDeltaDeg ?? 0,
         };
       }),
     );
@@ -1623,6 +2034,8 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     if (activeTagId === tagId) {
       setActiveTagId(null);
       setEditingTagId(null);
+      setLineEditingTagId(null);
+      setLineEndpointSelection(null);
       setShowOriginalTagId(null);
       setEditTarget("auto");
       setFinDeleteTagId(null);
@@ -1632,19 +2045,21 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const tag = tags.find((current) => current.id === tagId);
     setActiveTagId(tagId);
     setEditingTagId(tagId);
+    setLineEditingTagId(null);
+    setLineEndpointSelection(null);
     setShowOriginalTagId(tagId);
     setEditTarget("auto");
     setFinDeleteTagId(null);
     setTags((current) =>
       current.map((currentTag) => {
         if (currentTag.id !== tagId) return currentTag;
-        if (!image || tag?.correctionRotationDeg != null) {
+        if (!image || tag?.manualRotationDeltaDeg != null || tag?.polygonBox != null) {
           return { ...currentTag, status: "active" };
         }
         return {
           ...currentTag,
           status: "active",
-          correctionRotationDeg: verticalLineRotation(currentTag.bodyLine, image),
+          manualRotationDeltaDeg: 0,
         };
       }),
     );
@@ -1658,9 +2073,11 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
 
   return (
     <main className="app-shell">
-      <button className="hmr-clock" type="button" onClick={copyHotReloadTime} aria-label="Copy last hot reload time">
-        {hotReloadCopied ? "Copied" : `HMR ${hotReloadTime}`}
-      </button>
+      {!embedMode && (
+        <button className="hmr-clock" type="button" onClick={copyHotReloadTime} aria-label="Copy last hot reload time">
+          {hotReloadCopied ? "Copied" : `HMR ${hotReloadTime}`}
+        </button>
+      )}
       <section className="workspace" aria-label="Koi tagging workspace">
         <div className="stage-wrap">
           {image ? (
@@ -1687,9 +2104,9 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 <svg className="overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none">
                   {tags.map((tag, index) => (
                     <g key={tag.id} className={tag.id === activeTagId ? "selected" : ""}>
-                      <path d={pathFromPoints(tag.bodyLine)} className="body-line" />
-                      {tag.finLine && <path d={pathFromPoints(tag.finLine)} className="fin-line" />}
-                      {image && tag.id === editingTagId && tag.correctionRotationDeg != null && (
+                      <path d={pathFromPoints(tag.bodyLine)} className={`body-line ${activeLineEndpointTarget?.tagId === tag.id && activeLineEndpointTarget.line === "body" ? "line-edit-faded" : ""}`} />
+                      {tag.finLine && <path d={pathFromPoints(tag.finLine)} className={`fin-line ${activeLineEndpointTarget?.tagId === tag.id && activeLineEndpointTarget.line === "fin" ? "line-edit-faded" : ""}`} />}
+                      {image && tag.id === editingTagId && !lineEditing && (
                         <polygon className="oriented-bbox" points={polygonPoints(orientedCorrectedBoxPoints(tag, image))} />
                       )}
                       {tag.id !== editingTagId && (
@@ -1711,7 +2128,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                   )}
                 </svg>
 
-                {editingTag && activeOrientedPoints && (
+                {editingTag && activeOrientedPoints && !lineEditing && (
                   <>
                     <span
                       className="bbox-move-handle"
@@ -1747,29 +2164,80 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                   </>
                 )}
 
+                {editingTag && lineEditing && (
+                  <>
+                    {activeHeadEndpointEdit?.tagId !== editingTag.id && (
+                      <span
+                        className={`line-endpoint-handle body-start ${activeLineEndpointTarget?.tagId === editingTag.id && activeLineEndpointTarget.line === "body" && activeLineEndpointTarget.endpoint === "start" ? "selected-source" : ""}`}
+                        style={pointHandleStyle(editingTag.bodyLine[0], view.scale)}
+                        data-no-draw
+                        aria-label="Move fish head"
+                        onPointerDown={(event) => selectLineEndpoint(event, editingTag.id, "body", "start")}
+                      />
+                    )}
+                    <span
+                      className={`line-endpoint-handle body-end ${activeLineEndpointTarget?.tagId === editingTag.id && activeLineEndpointTarget.line === "body" && activeLineEndpointTarget.endpoint === "end" ? "selected-source" : ""}`}
+                      style={pointHandleStyle(editingTag.bodyLine[editingTag.bodyLine.length - 1], view.scale)}
+                      data-no-draw
+                      aria-label="Move fish tail"
+                      onPointerDown={(event) => selectLineEndpoint(event, editingTag.id, "body", "end")}
+                    />
+                    {editingTag.finLine && (
+                      <>
+                        <span
+                          className={`line-endpoint-handle fin-start ${activeLineEndpointTarget?.tagId === editingTag.id && activeLineEndpointTarget.line === "fin" && activeLineEndpointTarget.endpoint === "start" ? "selected-source" : ""}`}
+                          style={pointHandleStyle(editingTag.finLine[0], view.scale)}
+                          data-no-draw
+                          aria-label="Move fin line start"
+                          onPointerDown={(event) => selectLineEndpoint(event, editingTag.id, "fin", "start")}
+                        />
+                        <span
+                          className={`line-endpoint-handle fin-end ${activeLineEndpointTarget?.tagId === editingTag.id && activeLineEndpointTarget.line === "fin" && activeLineEndpointTarget.endpoint === "end" ? "selected-source" : ""}`}
+                          style={pointHandleStyle(editingTag.finLine[editingTag.finLine.length - 1], view.scale)}
+                          data-no-draw
+                          aria-label="Move fin line end"
+                          onPointerDown={(event) => selectLineEndpoint(event, editingTag.id, "fin", "end")}
+                        />
+                      </>
+                    )}
+                  </>
+                )}
+
+                {activeLineEndpointTarget && lineEditing && (
+                  <span
+                    className={`line-endpoint-target ${activeLineEndpointTarget.line}`}
+                    style={pointHandleStyle(activeLineEndpointTarget.point, view.scale)}
+                    data-no-draw
+                    aria-label="Drag selected line endpoint"
+                    onPointerDown={beginLineEndpointTargetDrag}
+                  />
+                )}
+
                 {mode === "tag" && paintMode === "crosshair" && aimPoint && (
                   <span className={`aim-crosshair ${drag?.type === "stroke" ? "painting" : ""}`} style={pointHandleStyle(aimPoint)} aria-hidden="true" />
                 )}
 
-                {tags.map((tag, index) => (
-                  <button
-                    key={`${tag.id}-head-select`}
-                    className={`head-select ${tag.id === activeTagId ? "active" : ""}`}
-                    style={{
-                      ...pointHandleStyle(tag.bodyLine[0], view.scale),
-                    }}
-                    data-no-draw
-                    onPointerDown={(event) => {
-                      if (mode !== "move") event.stopPropagation();
-                    }}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      if (mode === "move") return;
-                      toggleTagFromHead(tag.id);
-                    }}
-                    aria-label={`Select fish ${index + 1}`}
-                  />
-                ))}
+                {tags.map((tag, index) =>
+                  activeHeadEndpointEdit?.tagId === tag.id ? null : (
+                    <button
+                      key={`${tag.id}-head-select`}
+                      className={`head-select ${tag.id === activeTagId ? "active" : ""}`}
+                      style={{
+                        ...pointHandleStyle(tag.bodyLine[0], view.scale),
+                      }}
+                      data-no-draw
+                      onPointerDown={(event) => {
+                        if (mode !== "move") event.stopPropagation();
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (mode === "move") return;
+                        toggleTagFromHead(tag.id);
+                      }}
+                      aria-label={`Select fish ${index + 1}`}
+                    />
+                  ),
+                )}
 
                 {activeTag?.finLine && finDeleteTagId === activeTag.id && (
                   <button
@@ -1799,6 +2267,15 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                     </Button>
                     <Button
                       size="sm"
+                      variant={lineEditing ? "default" : "secondary"}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={toggleLineEditing}
+                      aria-label={lineEditing ? "Turn off line editing" : "Edit fish lines"}
+                    >
+                      <PencilLine size={16} />
+                    </Button>
+                    <Button
+                      size="sm"
                       variant="danger"
                       onPointerDown={(event) => event.stopPropagation()}
                       onClick={deleteActiveTag}
@@ -1811,14 +2288,18 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
               </div>
 
               <div className="floating-controls" data-no-draw onPointerDown={(event) => event.stopPropagation()}>
-                <label className="source-action-button floating-mode-button" aria-label="Open photo from album">
-                  <input type="file" accept="image/*" onChange={loadImage} />
-                  <ImagePlus size={19} />
-                </label>
-                <label className="source-action-button floating-mode-button" aria-label="Take photo with camera">
-                  <input type="file" accept="image/*" capture="environment" onChange={loadImage} />
-                  <Camera size={19} />
-                </label>
+                {!embedMode && (
+                  <>
+                    <label className="source-action-button floating-mode-button" aria-label="Open photo from album">
+                      <input type="file" accept="image/*" onChange={loadImage} />
+                      <ImagePlus size={19} />
+                    </label>
+                    <label className="source-action-button floating-mode-button" aria-label="Take photo with camera">
+                      <input type="file" accept="image/*" capture="environment" onChange={loadImage} />
+                      <Camera size={19} />
+                    </label>
+                  </>
+                )}
 
                 <Button
                   className="floating-mode-button mode-toggle-button"
@@ -1880,42 +2361,46 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                   <RotateCcw size={18} />
                 </Button>
 
-                <Button
-                  className="floating-mode-button"
-                  size="icon"
-                  variant={drawerOpen ? "default" : "secondary"}
-                  disabled={!tags.length}
-                  onClick={() => {
-                    setDrawerOpen((open) => {
-                      const nextOpen = !open;
-                      if (nextOpen) {
-                        setSettingsOpen(false);
-                      }
-                      return nextOpen;
-                    });
-                  }}
-                  aria-label={drawerOpen ? "Hide tagged fish drawer" : "Show tagged fish drawer"}
-                >
-                  {drawerOpen ? <PanelBottomClose size={18} /> : <PanelBottomOpen size={18} />}
-                </Button>
+                {!embedMode && (
+                  <>
+                    <Button
+                      className="floating-mode-button"
+                      size="icon"
+                      variant={drawerOpen ? "default" : "secondary"}
+                      disabled={!tags.length}
+                      onClick={() => {
+                        setDrawerOpen((open) => {
+                          const nextOpen = !open;
+                          if (nextOpen) {
+                            setSettingsOpen(false);
+                          }
+                          return nextOpen;
+                        });
+                      }}
+                      aria-label={drawerOpen ? "Hide tagged fish drawer" : "Show tagged fish drawer"}
+                    >
+                      {drawerOpen ? <PanelBottomClose size={18} /> : <PanelBottomOpen size={18} />}
+                    </Button>
 
-                <Button
-                  className="floating-mode-button"
-                  size="icon"
-                  variant={settingsOpen ? "default" : "secondary"}
-                  onClick={() => {
-                    setSettingsOpen((open) => {
-                      const nextOpen = !open;
-                      if (nextOpen) {
-                        setDrawerOpen(false);
-                      }
-                      return nextOpen;
-                    });
-                  }}
-                  aria-label={settingsOpen ? "Hide settings" : "Show settings"}
-                >
-                  <Settings size={18} />
-                </Button>
+                    <Button
+                      className="floating-mode-button"
+                      size="icon"
+                      variant={settingsOpen ? "default" : "secondary"}
+                      onClick={() => {
+                        setSettingsOpen((open) => {
+                          const nextOpen = !open;
+                          if (nextOpen) {
+                            setDrawerOpen(false);
+                          }
+                          return nextOpen;
+                        });
+                      }}
+                      aria-label={settingsOpen ? "Hide settings" : "Show settings"}
+                    >
+                      <Settings size={18} />
+                    </Button>
+                  </>
+                )}
 
                 <Button
                   className="floating-mode-button session-complete-button"
@@ -1928,7 +2413,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 </Button>
               </div>
 
-              {settingsOpen && (
+              {!embedMode && settingsOpen && (
                 <>
                   <button
                     className="settings-dismiss"
@@ -2075,7 +2560,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         </div>
       </section>
 
-      {drawerOpen && image && tags.length > 0 && (
+      {!embedMode && drawerOpen && image && tags.length > 0 && (
         <CorrectedThumbDrawer
           image={image}
           tags={tags}

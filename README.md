@@ -70,6 +70,8 @@ Frontend routes are currently simple pathname switches:
 - `/affine`: older geometry prototype
 - `/dashboard`: image manager / workflow dashboard
 - `/parent-demo`: local proof that a parent app can create and embed a tagger session
+- `/embed-parent-demo`: local proof that a parent app can send private image bytes into the tagger iframe
+- `/embed`: lightweight postMessage editor for parent-app integration without the session API
 - `/s/:sessionId`: standalone tagger session route
 
 The dashboard currently uses seed data. The Bun API uses in-memory sessions for the first Railway proof and has endpoint skeletons for:
@@ -206,6 +208,9 @@ Webhook payload:
         "bodyLine": [],
         "finLine": [],
         "correctedBox": {},
+        "cropBox": {},
+        "rotationDeg": 0,
+        "rotationPivot": { "x": 0.5, "y": 0.5 },
         "correctedPolygon": [],
         "buckets": [],
         "preview": {
@@ -233,6 +238,93 @@ POST /api/sessions/:sessionId/complete
 ```
 
 SSE is still kept for browser-only demos because GitHub Pages cannot receive inbound webhook requests. A real parent backend can use the webhook as the primary completion channel.
+
+## Lightweight Embed Flow
+
+For KoiTag integration, start with `/embed` instead of the session API.
+
+This mode is intentionally smaller:
+
+- no fishCrossTag database
+- no Railway session record
+- no webhook
+- no public image URL
+- no permanent fishCrossTag geometry storage
+- KoiTag owns persistence and derives its existing `FishMediaPresentation`
+
+Open the local demo:
+
+```txt
+http://127.0.0.1:5185/embed-parent-demo
+```
+
+The parent app opens:
+
+```txt
+/embed?parentOrigin=<exact-parent-origin>&nonce=<random-nonce>
+```
+
+The iframe sends:
+
+```ts
+type FishCrossLineEmbedReadyMessage = {
+  type: "fishcrossline:embed:ready";
+  nonce: string;
+};
+```
+
+The parent replies with image bytes:
+
+```ts
+type FishCrossLineEmbedInitMessage = {
+  type: "fishcrossline:embed:init";
+  nonce: string;
+  image: {
+    bytes: ArrayBuffer;
+    mimeType: string;
+    name?: string;
+    id?: string;
+  };
+};
+```
+
+When the user clicks the green checkmark, `/embed` replies:
+
+```ts
+type FishCrossLineResultV1 = {
+  version: 1;
+  imageWidth: number;
+  imageHeight: number;
+  tags: Array<{
+    bodyLine: { x: number; y: number }[];
+    finLine?: { x: number; y: number }[];
+    rotationDeg: number;
+    rotationPivot: { x: number; y: number };
+    cropBox: { x: number; y: number; width: number; height: number };
+  }>;
+};
+```
+
+The complete browser message is:
+
+```ts
+type FishCrossLineEmbedCompleteMessage = {
+  type: "fishcrossline:embed:complete";
+  nonce: string;
+  result: FishCrossLineResultV1;
+};
+```
+
+Security rules for the parent app:
+
+- Generate a fresh nonce for every editor launch.
+- Accept messages only from the exact fishCrossTag origin.
+- Send messages only to the exact fishCrossTag origin.
+- Validate the returned `nonce`.
+- Validate result shape before applying it.
+- Limit image MIME types and image size before sending bytes.
+
+For this first KoiTag experiment, discard `bodyLine` and `finLine` after conversion if KoiTag is not ready to store them. They are returned because they are cheap and useful later. The current contract intentionally omits the internal oriented polygon; KoiTag can add polygon storage later without changing this first adapter.
 
 ## Railway Plan
 
@@ -494,6 +586,9 @@ Browser message:
         finLine: [{ x: 0.18, y: 0.55 }, { x: 0.32, y: 0.56 }],
         finMode: "one-sided-visible",
         correctedBox: { x: 0.1, y: 0.2, width: 0.2, height: 0.6 },
+        cropBox: { x: 0.1, y: 0.2, width: 0.2, height: 0.6 },
+        rotationDeg: 12.5,
+        rotationPivot: { x: 0.2, y: 0.5 },
         correctedPolygon: [
           { x: 0.1, y: 0.2 },
           { x: 0.3, y: 0.2 },

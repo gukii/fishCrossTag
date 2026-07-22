@@ -12,6 +12,29 @@ export type WorkflowBox = {
 
 export type FinMode = "none" | "one-sided-visible" | "two-sided-visible";
 
+export type FinRelationToBody = "crosses-main-line" | "one-sided-attached" | "near-body-detached" | "unclear";
+
+export type FinSideMetrics = {
+  side: "main-line-left" | "main-line-right";
+  line: WorkflowPoint[];
+  angleDeg: number;
+  lengthPx: number;
+  distanceToMainLinePx: number;
+  visible: boolean;
+  inferred?: boolean;
+};
+
+export type FinMetrics = {
+  relationToBody: FinRelationToBody;
+  sides: FinSideMetrics[];
+  crossesMainLine: boolean;
+};
+
+export type CropInference = {
+  mirroredFinWidth: boolean;
+  source: "one-sided-fin" | "two-sided-fin" | "body-only";
+};
+
 export type AnnotationBucket =
   | "has_fin_line"
   | "no_fin_line"
@@ -28,8 +51,13 @@ export type FishAnnotationPayload = {
   bodyLine: WorkflowPoint[];
   finLine?: WorkflowPoint[];
   finMode?: FinMode;
+  finMetrics?: FinMetrics;
   correctedPolygon?: WorkflowPoint[];
   correctedBox?: WorkflowBox;
+  cropBox?: WorkflowBox;
+  cropInference?: CropInference;
+  rotationDeg?: number;
+  rotationPivot?: WorkflowPoint;
   imageWidth: number;
   imageHeight: number;
 };
@@ -64,6 +92,21 @@ export type TaggerCompletePayload = {
   annotations: TaggerAnnotationResult[];
   metadata?: Record<string, unknown>;
   completedAt: string;
+};
+
+export type FishCrossLineTagResultV1 = {
+  bodyLine: WorkflowPoint[];
+  finLine?: WorkflowPoint[];
+  rotationDeg: number;
+  rotationPivot: WorkflowPoint;
+  cropBox: WorkflowBox;
+};
+
+export type FishCrossLineResultV1 = {
+  version: 1;
+  imageWidth: number;
+  imageHeight: number;
+  tags: FishCrossLineTagResultV1[];
 };
 
 export type TaggerSession = {
