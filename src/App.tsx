@@ -6,16 +6,15 @@ import {
   Download,
   Fingerprint,
   ImagePlus,
-  Minus,
   PanelBottomClose,
   PanelBottomOpen,
   PencilLine,
-  Plus,
-  RotateCcw,
+  SearchX,
   Settings,
   Signature,
   Trash2,
   ZoomIn,
+  ZoomOut,
   X,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
@@ -80,6 +79,7 @@ type AppProps = {
   sessionMode?: boolean;
   metadata?: Record<string, unknown>;
   onSessionComplete?: (payload: TaggerCompletePayload) => void | Promise<void>;
+  onCancel?: () => void;
   persistLocalSettings?: boolean;
 };
 
@@ -105,6 +105,7 @@ type CropSettings = {
   marginXByLength: number;
   marginYByLength: number;
   crosshairOffsetPx: number;
+  quickZoomPercent: number;
   showCrosshairIntro: boolean;
   showExportNumbers: boolean;
   applyVignette: boolean;
@@ -121,6 +122,7 @@ const DEFAULT_CROP_SETTINGS: CropSettings = {
   marginXByLength: 0.1,
   marginYByLength: 0.1,
   crosshairOffsetPx: 50,
+  quickZoomPercent: 30,
   showCrosshairIntro: true,
   showExportNumbers: true,
   applyVignette: false,
@@ -150,6 +152,10 @@ if (import.meta.hot) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+function finiteOrDefault(value: number, fallback: number) {
+  return Number.isFinite(value) ? value : fallback;
 }
 
 function clampPoint(point: Point): Point {
@@ -223,12 +229,14 @@ function loadCropSettings(): CropSettings {
     const storedX = Number(parsed.marginXByLength ?? DEFAULT_CROP_SETTINGS.marginXByLength);
     const storedY = Number(parsed.marginYByLength ?? DEFAULT_CROP_SETTINGS.marginYByLength);
     const storedCrosshairOffset = Number(parsed.crosshairOffsetPx ?? DEFAULT_CROP_SETTINGS.crosshairOffsetPx);
+    const storedQuickZoomPercent = finiteOrDefault(Number(parsed.quickZoomPercent), DEFAULT_CROP_SETTINGS.quickZoomPercent);
     if (storedX === 0.22 && storedY === 0.04) return DEFAULT_CROP_SETTINGS;
 
     return {
       marginXByLength: clamp(storedX, 0, 2),
       marginYByLength: clamp(storedY, 0, 2),
       crosshairOffsetPx: storedCrosshairOffset === 84 ? DEFAULT_CROP_SETTINGS.crosshairOffsetPx : clamp(storedCrosshairOffset, 20, 180),
+      quickZoomPercent: clamp(storedQuickZoomPercent, 5, 200),
       showCrosshairIntro: parsed.showCrosshairIntro ?? DEFAULT_CROP_SETTINGS.showCrosshairIntro,
       showExportNumbers: parsed.showExportNumbers ?? DEFAULT_CROP_SETTINGS.showExportNumbers,
       applyVignette: parsed.applyVignette ?? DEFAULT_CROP_SETTINGS.applyVignette,
@@ -768,6 +776,59 @@ function controlPosition(box: Box, viewScale = 1) {
   };
 }
 
+function controlPositionFromPoints(points: Point[], viewScale = 1) {
+  const bounds = boxFromPoints(points);
+  const center = boxCenter(bounds);
+  const candidates = [
+    {
+      x: center.x,
+      y: bounds.y - 0.075,
+      transform: "translate(-50%, -100%)",
+    },
+    {
+      x: center.x,
+      y: bounds.y + bounds.height + 0.075,
+      transform: "translate(-50%, 0)",
+    },
+    {
+      x: bounds.x - 0.075,
+      y: center.y,
+      transform: "translate(-100%, -50%)",
+    },
+    {
+      x: bounds.x + bounds.width + 0.075,
+      y: center.y,
+      transform: "translate(0, -50%)",
+    },
+  ].map((candidate) => {
+    const point = {
+      x: clamp(candidate.x, 0.12, 0.88),
+      y: clamp(candidate.y, 0.1, 0.86),
+    };
+    const clearance = Math.min(...points.map((handlePoint) => Math.hypot(point.x - handlePoint.x, point.y - handlePoint.y)));
+    const edgePenalty = candidate.y < 0.02 || candidate.y > 0.94 || candidate.x < 0.02 || candidate.x > 0.94 ? 0.06 : 0;
+    return { ...candidate, ...point, clearance: clearance - edgePenalty };
+  });
+  const best = candidates.reduce((winner, candidate) => (candidate.clearance > winner.clearance ? candidate : winner), candidates[0]);
+
+  return {
+    left: `${best.x * 100}%`,
+    top: `${best.y * 100}%`,
+    "--control-transform": best.transform,
+    "--control-scale": controlScale(viewScale),
+  };
+}
+
+function lineEditingControlPosition(tag: KoiTag, target: LineEndpointRef | null, viewScale = 1) {
+  const linePoints = [
+    tag.bodyLine[0],
+    tag.bodyLine[tag.bodyLine.length - 1],
+    ...(tag.finLine ? [tag.finLine[0], tag.finLine[tag.finLine.length - 1]] : []),
+    ...(target?.tagId === tag.id ? [target.point] : []),
+  ].filter((point): point is Point => Boolean(point));
+  return controlPositionFromPoints(linePoints, viewScale);
+}
+
 function correctedGeometry(tag: KoiTag, image: ImageInfo): CorrectedGeometry {
   const rotation = cropCorrectionRotation(tag, image);
   const correctedBox = sourceCorrectedBox(tag, image, frameCorrectionRotation(tag, image));
@@ -798,7 +859,7 @@ function containImageFrame(image: ImageInfo, stage: PixelRect): PixelRect {
   };
 }
 
-export default function App({ initialImage, sessionId, sessionMode = false, metadata, onSessionComplete, persistLocalSettings = true }: AppProps = {}) {
+export default function App({ initialImage, sessionId, sessionMode = false, metadata, onSessionComplete, onCancel, persistLocalSettings = true }: AppProps = {}) {
   const embedMode = metadata?.mode === "embed";
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageTransformRef = useRef<HTMLDivElement | null>(null);
@@ -834,10 +895,17 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   const editingTag = tags.find((tag) => tag.id === editingTagId) ?? null;
   const lineEditing = Boolean(editingTag && lineEditingTagId === editingTag.id);
   const activeStroke = drag?.type === "stroke" ? drag.points : [];
+  const quickZoomPercent = clamp(finiteOrDefault(cropSettings.quickZoomPercent, DEFAULT_CROP_SETTINGS.quickZoomPercent), 5, 200);
   const activeDisplayBox = editingTag?.bbox;
   const activeOrientedPoints = editingTag && image ? orientedCorrectedBoxPoints(editingTag, image) : null;
   const activeLineEndpointDrag = drag?.type === "lineEndpoint" ? drag : null;
   const activeLineEndpointTarget = activeLineEndpointDrag ?? lineEndpointSelection;
+  const fishActionsStyle =
+    editingTag && lineEditing
+      ? lineEditingControlPosition(editingTag, activeLineEndpointTarget, view.scale)
+      : activeOrientedPoints
+        ? controlPositionFromPoints(activeOrientedPoints, view.scale)
+        : controlPosition(activeDisplayBox ?? editingTag?.bbox ?? { x: 0.4, y: 0.4, width: 0.2, height: 0.2 }, view.scale);
   const activeHeadEndpointEdit =
     lineEditing &&
     activeLineEndpointTarget?.line === "body" &&
@@ -1152,6 +1220,12 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const rect = stageRef.current?.getBoundingClientRect();
     if (!rect) return;
     zoomAtClientPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, viewRef.current.scale * multiplier);
+  }
+
+  function zoomToStagePercent(percent: number) {
+    const rect = stageRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    zoomAtClientPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, percent / 100);
   }
 
   function resetView() {
@@ -2260,7 +2334,12 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 )}
 
                 {editingTag && (
-                  <div className="fish-actions" style={controlPosition(activeDisplayBox ?? editingTag.bbox, view.scale)} data-no-draw onPointerDown={(event) => event.stopPropagation()}>
+                  <div
+                    className="fish-actions"
+                    style={fishActionsStyle}
+                    data-no-draw
+                    onPointerDown={(event) => event.stopPropagation()}
+                  >
                     <Button size="sm" onPointerDown={(event) => event.stopPropagation()} onClick={finishTag}>
                       <Check size={16} />
                       OK
@@ -2286,6 +2365,20 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                   </div>
                 )}
               </div>
+
+              {onCancel && (
+                <Button
+                  className="embed-cancel-button"
+                  size="icon"
+                  variant="secondary"
+                  data-no-draw
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={onCancel}
+                  aria-label="Cancel tagging"
+                >
+                  <X size={19} />
+                </Button>
+              )}
 
               <div className="floating-controls" data-no-draw onPointerDown={(event) => event.stopPropagation()}>
                 {!embedMode && (
@@ -2339,16 +2432,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                   onClick={() => zoomFromStageCenter(VIEW_ZOOM_STEP)}
                   aria-label="Zoom in"
                 >
-                  <Plus size={18} />
-                </Button>
-                <Button
-                  className="floating-mode-button"
-                  size="icon"
-                  variant="secondary"
-                  onClick={() => zoomFromStageCenter(1 / VIEW_ZOOM_STEP)}
-                  aria-label="Zoom out"
-                >
-                  <Minus size={18} />
+                  <ZoomIn size={18} />
                 </Button>
 
                 <Button
@@ -2358,7 +2442,27 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                   onClick={resetView}
                   aria-label="Reset pan and zoom"
                 >
-                  <RotateCcw size={18} />
+                  <SearchX size={18} />
+                </Button>
+
+                <Button
+                  className="floating-mode-button"
+                  size="icon"
+                  variant="secondary"
+                  onClick={() => zoomFromStageCenter(1 / VIEW_ZOOM_STEP)}
+                  aria-label="Zoom out"
+                >
+                  <ZoomOut size={18} />
+                </Button>
+
+                <Button
+                  className="floating-mode-button quick-zoom-button"
+                  size="icon"
+                  variant="secondary"
+                  onClick={() => zoomToStagePercent(quickZoomPercent)}
+                  aria-label={`Zoom to ${Math.round(quickZoomPercent)} percent`}
+                >
+                  {Math.round(quickZoomPercent)}%
                 </Button>
 
                 {!embedMode && (
@@ -2403,7 +2507,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 )}
 
                 <Button
-                  className="floating-mode-button session-complete-button"
+                  className={`floating-mode-button session-complete-button ${tags.length && !(sessionMode && !onSessionComplete) ? "ready" : ""}`}
                   size="icon"
                   disabled={!tags.length || (sessionMode && !onSessionComplete)}
                   onClick={finishImage}
@@ -2479,6 +2583,24 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                             }
                           }}
                           onBlur={() => commitCrosshairOffsetInput()}
+                        />
+                      </label>
+                      <label>
+                        <span>Quick zoom %</span>
+                        <input
+                          type="number"
+                          min="5"
+                          max="200"
+                          step="1"
+                          value={quickZoomPercent}
+                          onChange={(event) => {
+                            const parsed = Number(event.target.value);
+                            if (!Number.isFinite(parsed)) return;
+                            setCropSettings((current) => ({
+                              ...current,
+                              quickZoomPercent: clamp(parsed, 5, 200),
+                            }));
+                          }}
                         />
                       </label>
                       <label className="settings-toggle">

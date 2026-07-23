@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Play, RotateCcw } from "lucide-react";
 import { Button } from "./components/ui/button";
 import {
+  EMBED_CANCEL_MESSAGE,
   EMBED_COMPLETE_MESSAGE,
   EMBED_ERROR_MESSAGE,
   EMBED_INIT_MESSAGE,
@@ -43,6 +44,11 @@ export default function EmbedParentDemo() {
       }
       if (data.type === EMBED_COMPLETE_MESSAGE) {
         setResult(data.result);
+        setError(null);
+      }
+      if (data.type === EMBED_CANCEL_MESSAGE) {
+        setStarted(false);
+        setResult(null);
         setError(null);
       }
       if (data.type === EMBED_ERROR_MESSAGE) {
@@ -134,4 +140,3 @@ export default function EmbedParentDemo() {
     </main>
   );
 }
-
