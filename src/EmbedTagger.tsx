@@ -158,7 +158,7 @@ export default function EmbedTagger() {
   }
 
   if (status === "ready" && image) {
-    return <App initialImage={image} sessionMode metadata={{ mode: "embed" }} onSessionComplete={completeEmbed} persistLocalSettings={false} />;
+    return <App initialImage={image} sessionMode metadata={{ mode: "embed" }} onSessionComplete={completeEmbed} onCancel={cancelEmbed} persistLocalSettings={false} />;
   }
 
   return (
