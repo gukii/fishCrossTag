@@ -2168,9 +2168,11 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 ref={imageTransformRef}
                 className="image-transform"
                 style={{
+                  left: imageFrame ? `${imageFrame.x}px` : 0,
+                  top: imageFrame ? `${imageFrame.y}px` : 0,
                   width: imageFrame ? `${imageFrame.width}px` : "100%",
                   height: imageFrame ? `${imageFrame.height}px` : "100%",
-                  transform: `translate(${(imageFrame?.x ?? 0) + view.x}px, ${(imageFrame?.y ?? 0) + view.y}px) scale(${view.scale})`,
+                  transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
                 }}
               >
                 <img ref={sourceImageRef} src={image.src} alt={image.name} draggable={false} />
