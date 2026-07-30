@@ -839,17 +839,21 @@ function correctedGeometry(tag: KoiTag, image: ImageInfo): CorrectedGeometry {
   };
 }
 
-function containImageFrame(image: ImageInfo, stage: PixelRect): PixelRect {
+function containImageFrame(image: ImageInfo, stage: PixelRect, paddingRatio = 0): PixelRect {
   if (stage.width <= 0 || stage.height <= 0) {
     return { x: 0, y: 0, width: 1, height: 1 };
   }
 
+  const paddingX = stage.width * paddingRatio;
+  const paddingY = stage.height * paddingRatio;
+  const availableWidth = Math.max(1, stage.width - paddingX * 2);
+  const availableHeight = Math.max(1, stage.height - paddingY * 2);
   const imageAspect = image.width / image.height;
-  const stageAspect = stage.width / stage.height;
+  const stageAspect = availableWidth / availableHeight;
   const frame =
     imageAspect > stageAspect
-      ? { width: stage.width, height: stage.width / imageAspect }
-      : { width: stage.height * imageAspect, height: stage.height };
+      ? { width: availableWidth, height: availableWidth / imageAspect }
+      : { width: availableHeight * imageAspect, height: availableHeight };
 
   return {
     x: (stage.width - frame.width) / 2,
@@ -912,7 +916,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     activeLineEndpointTarget.endpoint === "start"
       ? activeLineEndpointTarget
       : null;
-  const imageFrame = image ? containImageFrame(image, stageSize) : null;
+  const imageFrame = image ? containImageFrame(image, stageSize, embedMode ? 0.04 : 0) : null;
 
   useEffect(() => {
     viewRef.current = view;
@@ -2146,7 +2150,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
   }
 
   return (
-    <main className="app-shell">
+    <main className={embedMode ? "app-shell embed-mode" : "app-shell"}>
       {!embedMode && (
         <button className="hmr-clock" type="button" onClick={copyHotReloadTime} aria-label="Copy last hot reload time">
           {hotReloadCopied ? "Copied" : `HMR ${hotReloadTime}`}
@@ -2168,9 +2172,11 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                 ref={imageTransformRef}
                 className="image-transform"
                 style={{
+                  left: imageFrame ? `${imageFrame.x}px` : 0,
+                  top: imageFrame ? `${imageFrame.y}px` : 0,
                   width: imageFrame ? `${imageFrame.width}px` : "100%",
                   height: imageFrame ? `${imageFrame.height}px` : "100%",
-                  transform: `translate(${(imageFrame?.x ?? 0) + view.x}px, ${(imageFrame?.y ?? 0) + view.y}px) scale(${view.scale})`,
+                  transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
                 }}
               >
                 <img ref={sourceImageRef} src={image.src} alt={image.name} draggable={false} />
