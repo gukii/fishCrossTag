@@ -321,6 +321,8 @@ function nearestMainLineInfo(point: Point, bodyLine: Point[], image: ImageInfo) 
   let best:
     | {
         distancePx: number;
+        projection: Point;
+        signedDistancePx: number;
         segmentStart: Point;
         segmentEnd: Point;
         sideValue: number;
@@ -342,9 +344,18 @@ function nearestMainLineInfo(point: Point, bodyLine: Point[], image: ImageInfo) 
     const pointY = point.y * image.height;
     const distancePx = Math.hypot(pointX - projectedX, pointY - projectedY);
     const sideValue = dx * py - dy * px;
+    const segmentLengthPx = Math.hypot(dx, dy);
+    const signedDistancePx = segmentLengthPx > 0 ? sideValue / segmentLengthPx : 0;
 
     if (!best || distancePx < best.distancePx) {
-      best = { distancePx, segmentStart: start, segmentEnd: end, sideValue };
+      best = {
+        distancePx,
+        projection: { x: projectedX / image.width, y: projectedY / image.height },
+        signedDistancePx,
+        segmentStart: start,
+        segmentEnd: end,
+        sideValue,
+      };
     }
   }
 
@@ -426,7 +437,7 @@ function deriveCropInference(tag: KoiTag, image: ImageInfo): CropInference {
   if (!metrics?.sides.length) {
     return { mirroredFinWidth: false, source: "body-only" };
   }
-  if (!metrics.crossesMainLine && metrics.sides.length === 1 && (metrics.relationToBody === "one-sided-attached" || metrics.relationToBody === "near-body-detached")) {
+  if (mirroredOneSidedFinPoints(tag, image).length > 0) {
     return { mirroredFinWidth: true, source: "one-sided-fin" };
   }
   return { mirroredFinWidth: false, source: "two-sided-fin" };
@@ -475,8 +486,43 @@ function orderedBoxCorners(box: Box): Point[] {
   ];
 }
 
-function correctionCenter(tag: KoiTag): Point {
-  return boxCenter(tag.bbox);
+function mirroredOneSidedFinPoints(tag: KoiTag, image: ImageInfo): Point[] {
+  if (!tag.finLine || tag.finLine.length < 2) return [];
+  const projections = tag.finLine.map((point) => nearestMainLineInfo(point, tag.bodyLine, image));
+  if (projections.some((projection) => !projection)) return [];
+  const resolved = projections as Array<NonNullable<(typeof projections)[number]>>;
+  const positiveReach = Math.max(0, ...resolved.map((projection) => projection.signedDistancePx));
+  const negativeReach = Math.max(0, ...resolved.map((projection) => -projection.signedDistancePx));
+  const majorReach = Math.max(positiveReach, negativeReach);
+  const minorReach = Math.min(positiveReach, negativeReach);
+
+  // A stroke that starts on the body often jitters a few pixels across it.
+  // Count it as two fins only when both sides have a meaningful reach.
+  if (majorReach < 2 || minorReach > Math.max(12, majorReach * 0.2)) return [];
+
+  return tag.finLine.map((point, index) => {
+    const nearest = resolved[index];
+
+    // Reflect each visible fin point across its nearest local body-line
+    // segment. This retains both its physical distance and its angle to the
+    // curved body instead of merely widening an axis-aligned box.
+    return {
+      x: nearest.projection.x * 2 - point.x,
+      y: nearest.projection.y * 2 - point.y,
+    };
+  });
+}
+
+function inferredAnnotationPoints(tag: KoiTag, image: ImageInfo): Point[] {
+  return [
+    ...tag.bodyLine,
+    ...(tag.finLine ?? []),
+    ...mirroredOneSidedFinPoints(tag, image),
+  ];
+}
+
+function correctionCenter(tag: KoiTag, image: ImageInfo): Point {
+  return boxCenter(boxFromPoints(inferredAnnotationPoints(tag, image), 0));
 }
 
 function boxFromPointsWithMargin(points: Point[], marginX: number, marginY: number): Box {
@@ -710,42 +756,15 @@ function bodyLengthPx(tag: KoiTag, image: ImageInfo) {
 }
 
 function rotatedAnnotationPoints(tag: KoiTag, image: ImageInfo, rotation = frameCorrectionRotation(tag, image)) {
-  const center = correctionCenter(tag);
-  const sourcePoints = tag.finLine ? [...tag.bodyLine, ...tag.finLine] : tag.bodyLine;
+  const center = correctionCenter(tag, image);
+  const sourcePoints = inferredAnnotationPoints(tag, image);
   return sourcePoints.map((point) => rotateImagePoint(point, center, rotation, image));
-}
-
-function mirroredOneSidedFinCropPoints(tag: KoiTag, image: ImageInfo, rotation: number) {
-  if (!tag.finLine || tag.finLine.length < 2) return [];
-  const metrics = deriveFinMetrics(tag, image);
-  if (!metrics || metrics.crossesMainLine || metrics.sides.length !== 1) return [];
-  if (metrics.relationToBody !== "one-sided-attached" && metrics.relationToBody !== "near-body-detached") return [];
-
-  const center = correctionCenter(tag);
-  const rotatedBody = tag.bodyLine.map((point) => rotateImagePoint(point, center, rotation, image));
-  const rotatedFin = tag.finLine.map((point) => rotateImagePoint(point, center, rotation, image));
-  const bodyCenterX = polygonCenter(rotatedBody).x;
-  const finDistances = rotatedFin.map((point) => point.x - bodyCenterX);
-  const reachesRight = Math.max(...finDistances) > Math.abs(Math.min(...finDistances));
-  const visibleReach = reachesRight ? Math.max(...finDistances) : Math.abs(Math.min(...finDistances));
-  if (visibleReach <= 0.000001) return [];
-
-  const mirroredX = bodyCenterX + (reachesRight ? -visibleReach : visibleReach);
-  const minY = Math.min(...rotatedFin.map((point) => point.y), ...rotatedBody.map((point) => point.y));
-  const maxY = Math.max(...rotatedFin.map((point) => point.y), ...rotatedBody.map((point) => point.y));
-  const midY = rotatedFin.reduce((sum, point) => sum + point.y, 0) / rotatedFin.length;
-
-  return [
-    { x: mirroredX, y: midY },
-    { x: mirroredX, y: minY },
-    { x: mirroredX, y: maxY },
-  ];
 }
 
 function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = frameCorrectionRotation(tag, image)) {
   if (tag.polygonBoxEdited && tag.polygonBox) return tag.polygonBox;
 
-  const rotatedPoints = [...rotatedAnnotationPoints(tag, image, rotation), ...mirroredOneSidedFinCropPoints(tag, image, rotation)];
+  const rotatedPoints = rotatedAnnotationPoints(tag, image, rotation);
   const fallbackMarginPx = tag.finLine ? 1 : bodyLengthPx(tag, image) * 0.04;
   const strokeSafeMarginPx = Math.max(fallbackMarginPx, CORRECTED_BOX_STROKE_MARGIN_PX);
   return boxFromPointsWithMargin(rotatedPoints, strokeSafeMarginPx / image.width, strokeSafeMarginPx / image.height);
@@ -759,7 +778,7 @@ function displayCrop(tag: KoiTag, image: ImageInfo, correctedBox: Box, settings:
 
 function orientedCorrectedBoxPoints(tag: KoiTag, image: ImageInfo) {
   const rotation = frameCorrectionRotation(tag, image);
-  const center = correctionCenter(tag);
+  const center = correctionCenter(tag, image);
   return orderedBoxCorners(sourceCorrectedBox(tag, image, rotation)).map((point) => rotateImagePoint(point, center, -rotation, image));
 }
 
@@ -916,7 +935,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     activeLineEndpointTarget.endpoint === "start"
       ? activeLineEndpointTarget
       : null;
-  const imageFrame = image ? containImageFrame(image, stageSize, embedMode ? 0.04 : 0) : null;
+  const imageFrame = image ? containImageFrame(image, stageSize) : null;
 
   useEffect(() => {
     viewRef.current = view;
@@ -990,19 +1009,31 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
 
     function updateStageSize() {
       const rect = stage.getBoundingClientRect();
-      setStageSize({ x: 0, y: 0, width: rect.width, height: rect.height });
+      const width = rect.width || stage.clientWidth || window.visualViewport?.width || window.innerWidth;
+      const height = rect.height || stage.clientHeight || window.visualViewport?.height || window.innerHeight;
+      setStageSize({ x: 0, y: 0, width, height });
     }
 
     updateStageSize();
+    const firstFrame = window.requestAnimationFrame(updateStageSize);
+    let settledFrame = 0;
+    const secondFrame = window.requestAnimationFrame(() => {
+      settledFrame = window.requestAnimationFrame(updateStageSize);
+    });
     const observer = new ResizeObserver(updateStageSize);
     observer.observe(stage);
     window.addEventListener("resize", updateStageSize);
     window.addEventListener("orientationchange", updateStageSize);
+    window.visualViewport?.addEventListener("resize", updateStageSize);
 
     return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+      if (settledFrame) window.cancelAnimationFrame(settledFrame);
       observer.disconnect();
       window.removeEventListener("resize", updateStageSize);
       window.removeEventListener("orientationchange", updateStageSize);
+      window.visualViewport?.removeEventListener("resize", updateStageSize);
     };
   }, [image]);
 
@@ -1267,7 +1298,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const context = canvas.getContext("2d");
     if (!context) return;
 
-    const center = correctionCenter(tag);
+    const center = correctionCenter(tag, image!);
     const centerX = center.x * image!.width;
     const centerY = center.y * image!.height;
     const cropX = crop.x * image!.width;
@@ -1358,7 +1389,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       cropBox: geometry.correctedBox,
       cropInference: deriveCropInference(tag, image),
       rotationDeg: geometry.rotation,
-      rotationPivot: correctionCenter(tag),
+      rotationPivot: correctionCenter(tag, image),
       correctedPolygon: orientedCorrectedBoxPoints(tag, image),
       imageWidth: image.width,
       imageHeight: image.height,
@@ -1716,7 +1747,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         const targetKey: "bbox" | "polygonBox" = tag.id === editingTagId && image ? "polygonBox" : "bbox";
         const correctedEditPatch = targetKey === "polygonBox" ? { polygonBoxEdited: true } : {};
         const normalizeTargetBox = targetKey === "polygonBox" ? normalizeFreeBox : normalizeBox;
-        const dragPoint = targetKey === "polygonBox" && image ? rotateImagePoint(point, correctionCenter(tag), frameCorrectionRotation(tag, image), image) : point;
+        const dragPoint = targetKey === "polygonBox" && image ? rotateImagePoint(point, correctionCenter(tag, image), frameCorrectionRotation(tag, image), image) : point;
 
         if (activeDrag.handle === "move") {
           return {
@@ -1915,7 +1946,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     if (!point || !tag) return;
     const isPolygonEdit = tag.id === editingTagId && image;
     const startBox = isPolygonEdit ? correctedGeometry(tag, image).correctedBox : tag.bbox;
-    const startPoint = isPolygonEdit ? rotateImagePoint(point, correctionCenter(tag), frameCorrectionRotation(tag, image), image) : point;
+    const startPoint = isPolygonEdit ? rotateImagePoint(point, correctionCenter(tag, image), frameCorrectionRotation(tag, image), image) : point;
     setActiveTagId(tagId);
     setEditingTagId(tagId);
     setLineEditingTagId(null);
@@ -2738,7 +2769,7 @@ function RotatedCropCanvas({
     if (!context) return;
 
     function draw(photo: HTMLImageElement) {
-      const center = correctionCenter(tag);
+      const center = correctionCenter(tag, image);
       const centerX = center.x * image.width;
       const centerY = center.y * image.height;
       const cropX = crop.x * image.width;
