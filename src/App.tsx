@@ -569,8 +569,9 @@ function mirroredOneSidedFinPoints(tag: KoiTag, image: ImageInfo): Point[] {
   const minorReach = Math.min(positiveReach, negativeReach);
 
   // A stroke that starts on the body often jitters a few pixels across it.
-  // Count it as two fins only when both sides have a meaningful reach.
-  if (majorReach < 2 || minorReach > Math.max(12, majorReach * 0.2)) return [];
+  // Beyond that small absolute tolerance, any opposite-side reach represents
+  // a real fin, even when it is much shorter than the fin on the other side.
+  if (majorReach < 2 || minorReach > 12) return [];
 
   return tag.finLine.map((point, index) => {
     const nearest = resolved[index];
@@ -602,7 +603,12 @@ function layoutAnnotationPoints(tag: KoiTag, image: ImageInfo): Point[] {
 }
 
 function correctionCenter(tag: KoiTag, image: ImageInfo): Point {
-  return boxCenter(boxFromPoints(layoutAnnotationPoints(tag, image), 0));
+  const horizontalLayout = boxFromPoints(layoutAnnotationPoints(tag, image), 0);
+  const verticalLayout = boxFromPoints(tag.bodyLine, 0);
+  return {
+    x: boxCenter(horizontalLayout).x,
+    y: boxCenter(verticalLayout).y,
+  };
 }
 
 function boxFromPointsWithMargin(points: Point[], marginX: number, marginY: number): Box {
@@ -853,15 +859,22 @@ function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = frameCorre
 
 function layoutCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = frameCorrectionRotation(tag, image)) {
   const center = correctionCenter(tag, image);
-  const rotatedPoints = layoutAnnotationPoints(tag, image)
+  const horizontalPoints = layoutAnnotationPoints(tag, image)
+    .map((point) => rotateImagePoint(point, center, rotation, image));
+  const verticalPoints = tag.bodyLine
     .map((point) => rotateImagePoint(point, center, rotation, image));
   const fallbackMarginPx = tag.finLine ? 1 : bodyLengthPx(tag, image) * 0.04;
   const strokeSafeMarginPx = Math.max(fallbackMarginPx, CORRECTED_BOX_STROKE_MARGIN_PX);
-  return boxFromPointsWithMargin(
-    rotatedPoints,
-    strokeSafeMarginPx / image.width,
-    strokeSafeMarginPx / image.height,
-  );
+  const marginX = strokeSafeMarginPx / image.width;
+  const marginY = strokeSafeMarginPx / image.height;
+  const xs = horizontalPoints.map((point) => point.x);
+  const ys = verticalPoints.map((point) => point.y);
+  return {
+    x: Math.min(...xs) - marginX,
+    y: Math.min(...ys) - marginY,
+    width: Math.max(...xs) - Math.min(...xs) + marginX * 2,
+    height: Math.max(...ys) - Math.min(...ys) + marginY * 2,
+  };
 }
 
 function centeredVisibilityBox(layoutBox: Box, visibilityBox: Box): Box {
