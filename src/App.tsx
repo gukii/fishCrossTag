@@ -317,10 +317,84 @@ function pathLengthPx(points: Point[], image: ImageInfo) {
   }, 0);
 }
 
+function layoutBodyLine(tag: KoiTag, image: ImageInfo): Point[] {
+  if (tag.bodyLine.length < 4) return tag.bodyLine;
+
+  const cumulative = [0];
+  for (let index = 1; index < tag.bodyLine.length; index += 1) {
+    const previous = tag.bodyLine[index - 1];
+    const point = tag.bodyLine[index];
+    cumulative.push(
+      cumulative[index - 1] + Math.hypot(
+        (point.x - previous.x) * image.width,
+        (point.y - previous.y) * image.height,
+      ),
+    );
+  }
+  const totalLength = cumulative[cumulative.length - 1] ?? 0;
+  if (totalLength < 40) return tag.bodyLine;
+
+  const pointAtDistance = (distance: number) => {
+    const index = cumulative.findIndex((value) => value >= distance);
+    if (index <= 0) return tag.bodyLine[0];
+    if (index < 0) return tag.bodyLine[tag.bodyLine.length - 1];
+    const start = tag.bodyLine[index - 1];
+    const end = tag.bodyLine[index];
+    const segmentStart = cumulative[index - 1];
+    const segmentLength = cumulative[index] - segmentStart;
+    const amount = segmentLength > 0 ? (distance - segmentStart) / segmentLength : 0;
+    return {
+      x: start.x + (end.x - start.x) * amount,
+      y: start.y + (end.y - start.y) * amount,
+    };
+  };
+  const axisStart = pointAtDistance(totalLength * 0.08);
+  const axisEnd = pointAtDistance(totalLength * 0.58);
+  const axis = {
+    x: (axisEnd.x - axisStart.x) * image.width,
+    y: (axisEnd.y - axisStart.y) * image.height,
+  };
+  const axisLength = Math.hypot(axis.x, axis.y);
+  if (axisLength < 1) return tag.bodyLine;
+
+  for (let fraction = 0.62; fraction <= 0.88; fraction += 0.02) {
+    const startDistance = totalLength * fraction;
+    const start = pointAtDistance(startDistance);
+    const end = pointAtDistance(Math.min(totalLength, startDistance + totalLength * 0.1));
+    const tailVector = {
+      x: (end.x - start.x) * image.width,
+      y: (end.y - start.y) * image.height,
+    };
+    const tailLength = Math.hypot(tailVector.x, tailVector.y);
+    if (tailLength < 1) continue;
+
+    const dot = clamp(
+      (axis.x * tailVector.x + axis.y * tailVector.y) / (axisLength * tailLength),
+      -1,
+      1,
+    );
+    const angle = (Math.acos(dot) * 180) / Math.PI;
+    const tailEnd = tag.bodyLine[tag.bodyLine.length - 1];
+    const tailOffset = {
+      x: (tailEnd.x - start.x) * image.width,
+      y: (tailEnd.y - start.y) * image.height,
+    };
+    const lateralReach = Math.abs(axis.x * tailOffset.y - axis.y * tailOffset.x) / axisLength;
+    if (angle >= 38 && lateralReach >= Math.max(20, totalLength * 0.07)) {
+      const cutIndex = cumulative.findIndex((distance) => distance >= startDistance);
+      return tag.bodyLine.slice(0, Math.max(2, cutIndex + 1));
+    }
+  }
+
+  return tag.bodyLine;
+}
+
 function nearestMainLineInfo(point: Point, bodyLine: Point[], image: ImageInfo) {
   let best:
     | {
         distancePx: number;
+        projection: Point;
+        signedDistancePx: number;
         segmentStart: Point;
         segmentEnd: Point;
         sideValue: number;
@@ -342,9 +416,18 @@ function nearestMainLineInfo(point: Point, bodyLine: Point[], image: ImageInfo) 
     const pointY = point.y * image.height;
     const distancePx = Math.hypot(pointX - projectedX, pointY - projectedY);
     const sideValue = dx * py - dy * px;
+    const segmentLengthPx = Math.hypot(dx, dy);
+    const signedDistancePx = segmentLengthPx > 0 ? sideValue / segmentLengthPx : 0;
 
     if (!best || distancePx < best.distancePx) {
-      best = { distancePx, segmentStart: start, segmentEnd: end, sideValue };
+      best = {
+        distancePx,
+        projection: { x: projectedX / image.width, y: projectedY / image.height },
+        signedDistancePx,
+        segmentStart: start,
+        segmentEnd: end,
+        sideValue,
+      };
     }
   }
 
@@ -426,7 +509,7 @@ function deriveCropInference(tag: KoiTag, image: ImageInfo): CropInference {
   if (!metrics?.sides.length) {
     return { mirroredFinWidth: false, source: "body-only" };
   }
-  if (!metrics.crossesMainLine && metrics.sides.length === 1 && (metrics.relationToBody === "one-sided-attached" || metrics.relationToBody === "near-body-detached")) {
+  if (mirroredOneSidedFinPoints(tag, image).length > 0) {
     return { mirroredFinWidth: true, source: "one-sided-fin" };
   }
   return { mirroredFinWidth: false, source: "two-sided-fin" };
@@ -475,8 +558,193 @@ function orderedBoxCorners(box: Box): Point[] {
   ];
 }
 
-function correctionCenter(tag: KoiTag): Point {
-  return boxCenter(tag.bbox);
+function mirroredOneSidedFinPoints(tag: KoiTag, image: ImageInfo): Point[] {
+  if (!tag.finLine || tag.finLine.length < 2) return [];
+  const projections = tag.finLine.map((point) => nearestMainLineInfo(point, tag.bodyLine, image));
+  if (projections.some((projection) => !projection)) return [];
+  const resolved = projections as Array<NonNullable<(typeof projections)[number]>>;
+  const positiveReach = Math.max(0, ...resolved.map((projection) => projection.signedDistancePx));
+  const negativeReach = Math.max(0, ...resolved.map((projection) => -projection.signedDistancePx));
+  const majorReach = Math.max(positiveReach, negativeReach);
+  const minorReach = Math.min(positiveReach, negativeReach);
+
+  // A stroke that starts on the body often jitters a few pixels across it.
+  // Beyond that small absolute tolerance, any opposite-side reach represents
+  // a real fin, even when it is much shorter than the fin on the other side.
+  if (majorReach < 2 || minorReach > 12) return [];
+
+  const bodyPixels = tag.bodyLine.map((point) => ({ x: point.x * image.width, y: point.y * image.height }));
+  const finPixels = tag.finLine.map((point) => ({ x: point.x * image.width, y: point.y * image.height }));
+  const axis = localBodyMirrorAxis(bodyPixels, finPixels);
+  if (!axis) return [];
+
+  // Use one short local body tangent as the mirror axis. A rigid reflection
+  // keeps the ghost fin exactly as long and smooth as the tagged fin.
+  return finPixels.map((point) => {
+    const mirrored = reflectPointAcrossLine(point, axis.origin, axis.direction);
+    return { x: mirrored.x / image.width, y: mirrored.y / image.height };
+  });
+}
+
+function localBodyMirrorAxis(bodyLine: Point[], finLine: Point[]) {
+  const nearest = finLine.map((point) => nearestPolylineProjection(point, bodyLine));
+  if (nearest.some((value) => !value)) return undefined;
+  const resolved = nearest as Array<NonNullable<(typeof nearest)[number]>>;
+  const rootIndex = resolved.reduce(
+    (best, value, index) => value.distanceSquared < resolved[best].distanceSquared ? index : best,
+    0,
+  );
+  const root = finLine[rootIndex];
+  const neighborIndexes = [rootIndex - 1, rootIndex + 1].filter((index) => index >= 0 && index < finLine.length);
+  const neighborIndex = neighborIndexes.reduce<number | undefined>((best, index) => {
+    if (best === undefined) return index;
+    return resolved[index].distanceSquared > resolved[best].distanceSquared ? index : best;
+  }, undefined);
+  const neighbor = neighborIndex === undefined ? undefined : finLine[neighborIndex];
+  const finDirection = neighbor
+    ? { x: neighbor.x - root.x, y: neighbor.y - root.y }
+    : { x: finLine.at(-1)!.x - finLine[0].x, y: finLine.at(-1)!.y - finLine[0].y };
+  if (Math.hypot(finDirection.x, finDirection.y) < 0.001) return undefined;
+
+  let intersection: {
+    distance: number;
+    point: Point;
+    segmentIndex: number;
+    segmentT: number;
+  } | undefined;
+  for (let index = 1; index < bodyLine.length; index += 1) {
+    const candidate = infiniteLineSegmentIntersection(root, finDirection, bodyLine[index - 1], bodyLine[index]);
+    if (!candidate) continue;
+    const distance = Math.hypot(candidate.point.x - root.x, candidate.point.y - root.y);
+    if (!intersection || distance < intersection.distance) {
+      intersection = { ...candidate, distance, segmentIndex: index };
+    }
+  }
+
+  const fallback = resolved[rootIndex];
+  const origin = intersection?.point ?? fallback.projection;
+  const segmentIndex = intersection?.segmentIndex ?? fallback.segmentIndex;
+  const segmentT = intersection?.segmentT ?? fallback.segmentT;
+  const cumulative = cumulativePointDistances(bodyLine);
+  const totalLength = cumulative.at(-1) ?? 0;
+  const segmentStartDistance = cumulative[segmentIndex - 1] ?? 0;
+  const segmentLength = (cumulative[segmentIndex] ?? segmentStartDistance) - segmentStartDistance;
+  const originDistance = segmentStartDistance + segmentLength * segmentT;
+  const halfWindow = Math.max(6, Math.min(32, totalLength * 0.025));
+  const axisStart = pointAtPolylineDistance(bodyLine, cumulative, Math.max(0, originDistance - halfWindow));
+  const axisEnd = pointAtPolylineDistance(bodyLine, cumulative, Math.min(totalLength, originDistance + halfWindow));
+  const direction = { x: axisEnd.x - axisStart.x, y: axisEnd.y - axisStart.y };
+
+  return Math.hypot(direction.x, direction.y) >= 0.001 ? { direction, origin } : undefined;
+}
+
+function nearestPolylineProjection(point: Point, line: Point[]) {
+  let nearest: {
+    distanceSquared: number;
+    projection: Point;
+    segmentIndex: number;
+    segmentT: number;
+  } | undefined;
+
+  for (let index = 1; index < line.length; index += 1) {
+    const start = line[index - 1];
+    const end = line[index];
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const lengthSquared = dx * dx + dy * dy;
+    const segmentT = lengthSquared > 0
+      ? clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0, 1)
+      : 0;
+    const projection = { x: start.x + dx * segmentT, y: start.y + dy * segmentT };
+    const distanceSquared = (point.x - projection.x) ** 2 + (point.y - projection.y) ** 2;
+    if (!nearest || distanceSquared < nearest.distanceSquared) {
+      nearest = { distanceSquared, projection, segmentIndex: index, segmentT };
+    }
+  }
+
+  return nearest;
+}
+
+function infiniteLineSegmentIntersection(
+  lineOrigin: Point,
+  lineDirection: Point,
+  segmentStart: Point,
+  segmentEnd: Point,
+) {
+  const segmentDirection = { x: segmentEnd.x - segmentStart.x, y: segmentEnd.y - segmentStart.y };
+  const denominator = pointCross(lineDirection, segmentDirection);
+  if (Math.abs(denominator) < 0.000001) return undefined;
+  const offset = { x: segmentStart.x - lineOrigin.x, y: segmentStart.y - lineOrigin.y };
+  const segmentT = pointCross(offset, lineDirection) / denominator;
+  if (segmentT < -0.000001 || segmentT > 1.000001) return undefined;
+  const lineT = pointCross(offset, segmentDirection) / denominator;
+  return {
+    point: { x: lineOrigin.x + lineDirection.x * lineT, y: lineOrigin.y + lineDirection.y * lineT },
+    segmentT: clamp(segmentT, 0, 1),
+  };
+}
+
+function reflectPointAcrossLine(point: Point, origin: Point, direction: Point): Point {
+  const lengthSquared = direction.x * direction.x + direction.y * direction.y;
+  const offset = { x: point.x - origin.x, y: point.y - origin.y };
+  const projectionT = (offset.x * direction.x + offset.y * direction.y) / lengthSquared;
+  const projection = { x: origin.x + direction.x * projectionT, y: origin.y + direction.y * projectionT };
+  return { x: projection.x * 2 - point.x, y: projection.y * 2 - point.y };
+}
+
+function cumulativePointDistances(points: Point[]) {
+  const distances = [0];
+  for (let index = 1; index < points.length; index += 1) {
+    distances.push(distances[index - 1] + Math.hypot(
+      points[index].x - points[index - 1].x,
+      points[index].y - points[index - 1].y,
+    ));
+  }
+  return distances;
+}
+
+function pointAtPolylineDistance(points: Point[], cumulative: number[], distance: number): Point {
+  const index = cumulative.findIndex((value) => value >= distance);
+  if (index <= 0) return points[0];
+  if (index < 0) return points[points.length - 1];
+  const start = points[index - 1];
+  const end = points[index];
+  const segmentStart = cumulative[index - 1];
+  const segmentLength = cumulative[index] - segmentStart;
+  const segmentT = segmentLength > 0 ? (distance - segmentStart) / segmentLength : 0;
+  return {
+    x: start.x + (end.x - start.x) * segmentT,
+    y: start.y + (end.y - start.y) * segmentT,
+  };
+}
+
+function pointCross(first: Point, second: Point) {
+  return first.x * second.y - first.y * second.x;
+}
+
+function inferredAnnotationPoints(tag: KoiTag, image: ImageInfo): Point[] {
+  return [
+    ...tag.bodyLine,
+    ...(tag.finLine ?? []),
+    ...mirroredOneSidedFinPoints(tag, image),
+  ];
+}
+
+function layoutAnnotationPoints(tag: KoiTag, image: ImageInfo): Point[] {
+  return [
+    ...layoutBodyLine(tag, image),
+    ...(tag.finLine ?? []),
+    ...mirroredOneSidedFinPoints(tag, image),
+  ];
+}
+
+function correctionCenter(tag: KoiTag, image: ImageInfo): Point {
+  const horizontalLayout = boxFromPoints(layoutAnnotationPoints(tag, image), 0);
+  const verticalLayout = boxFromPoints(tag.bodyLine, 0);
+  return {
+    x: boxCenter(horizontalLayout).x,
+    y: boxCenter(verticalLayout).y,
+  };
 }
 
 function boxFromPointsWithMargin(points: Point[], marginX: number, marginY: number): Box {
@@ -688,7 +956,7 @@ function polygonPoints(points: Point[]) {
 }
 
 function baseCorrectionRotation(tag: KoiTag, image: ImageInfo) {
-  return headWeightedLineRotation(tag.bodyLine, image);
+  return headWeightedLineRotation(layoutBodyLine(tag, image), image);
 }
 
 function manualRotationDelta(tag: KoiTag) {
@@ -704,62 +972,145 @@ function cropCorrectionRotation(tag: KoiTag, image: ImageInfo) {
 }
 
 function bodyLengthPx(tag: KoiTag, image: ImageInfo) {
-  const head = tag.bodyLine[0];
-  const tail = tag.bodyLine[tag.bodyLine.length - 1];
+  const bodyLine = layoutBodyLine(tag, image);
+  const head = bodyLine[0];
+  const tail = bodyLine[bodyLine.length - 1];
   return Math.max(40, Math.hypot((head.x - tail.x) * image.width, (head.y - tail.y) * image.height));
 }
 
 function rotatedAnnotationPoints(tag: KoiTag, image: ImageInfo, rotation = frameCorrectionRotation(tag, image)) {
-  const center = correctionCenter(tag);
-  const sourcePoints = tag.finLine ? [...tag.bodyLine, ...tag.finLine] : tag.bodyLine;
+  const center = correctionCenter(tag, image);
+  const sourcePoints = inferredAnnotationPoints(tag, image);
   return sourcePoints.map((point) => rotateImagePoint(point, center, rotation, image));
-}
-
-function mirroredOneSidedFinCropPoints(tag: KoiTag, image: ImageInfo, rotation: number) {
-  if (!tag.finLine || tag.finLine.length < 2) return [];
-  const metrics = deriveFinMetrics(tag, image);
-  if (!metrics || metrics.crossesMainLine || metrics.sides.length !== 1) return [];
-  if (metrics.relationToBody !== "one-sided-attached" && metrics.relationToBody !== "near-body-detached") return [];
-
-  const center = correctionCenter(tag);
-  const rotatedBody = tag.bodyLine.map((point) => rotateImagePoint(point, center, rotation, image));
-  const rotatedFin = tag.finLine.map((point) => rotateImagePoint(point, center, rotation, image));
-  const bodyCenterX = polygonCenter(rotatedBody).x;
-  const finDistances = rotatedFin.map((point) => point.x - bodyCenterX);
-  const reachesRight = Math.max(...finDistances) > Math.abs(Math.min(...finDistances));
-  const visibleReach = reachesRight ? Math.max(...finDistances) : Math.abs(Math.min(...finDistances));
-  if (visibleReach <= 0.000001) return [];
-
-  const mirroredX = bodyCenterX + (reachesRight ? -visibleReach : visibleReach);
-  const minY = Math.min(...rotatedFin.map((point) => point.y), ...rotatedBody.map((point) => point.y));
-  const maxY = Math.max(...rotatedFin.map((point) => point.y), ...rotatedBody.map((point) => point.y));
-  const midY = rotatedFin.reduce((sum, point) => sum + point.y, 0) / rotatedFin.length;
-
-  return [
-    { x: mirroredX, y: midY },
-    { x: mirroredX, y: minY },
-    { x: mirroredX, y: maxY },
-  ];
 }
 
 function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = frameCorrectionRotation(tag, image)) {
   if (tag.polygonBoxEdited && tag.polygonBox) return tag.polygonBox;
 
-  const rotatedPoints = [...rotatedAnnotationPoints(tag, image, rotation), ...mirroredOneSidedFinCropPoints(tag, image, rotation)];
+  const rotatedPoints = rotatedAnnotationPoints(tag, image, rotation);
   const fallbackMarginPx = tag.finLine ? 1 : bodyLengthPx(tag, image) * 0.04;
   const strokeSafeMarginPx = Math.max(fallbackMarginPx, CORRECTED_BOX_STROKE_MARGIN_PX);
   return boxFromPointsWithMargin(rotatedPoints, strokeSafeMarginPx / image.width, strokeSafeMarginPx / image.height);
 }
 
+function layoutCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = frameCorrectionRotation(tag, image)) {
+  const center = correctionCenter(tag, image);
+  const horizontalPoints = layoutAnnotationPoints(tag, image)
+    .map((point) => rotateImagePoint(point, center, rotation, image));
+  const verticalPoints = tag.bodyLine
+    .map((point) => rotateImagePoint(point, center, rotation, image));
+  const fallbackMarginPx = tag.finLine ? 1 : bodyLengthPx(tag, image) * 0.04;
+  const strokeSafeMarginPx = Math.max(fallbackMarginPx, CORRECTED_BOX_STROKE_MARGIN_PX);
+  const marginX = strokeSafeMarginPx / image.width;
+  const marginY = strokeSafeMarginPx / image.height;
+  const xs = horizontalPoints.map((point) => point.x);
+  const ys = verticalPoints.map((point) => point.y);
+  return {
+    x: Math.min(...xs) - marginX,
+    y: Math.min(...ys) - marginY,
+    width: Math.max(...xs) - Math.min(...xs) + marginX * 2,
+    height: Math.max(...ys) - Math.min(...ys) + marginY * 2,
+  };
+}
+
+function centeredVisibilityBox(layoutBox: Box, visibilityBox: Box): Box {
+  const centerX = layoutBox.x + layoutBox.width / 2;
+  const centerY = layoutBox.y + layoutBox.height / 2;
+  const halfWidth = Math.max(
+    layoutBox.width / 2,
+    centerX - visibilityBox.x,
+    visibilityBox.x + visibilityBox.width - centerX,
+  );
+  const halfHeight = Math.max(
+    layoutBox.height / 2,
+    centerY - visibilityBox.y,
+    visibilityBox.y + visibilityBox.height - centerY,
+  );
+  return {
+    x: centerX - halfWidth,
+    y: centerY - halfHeight,
+    width: halfWidth * 2,
+    height: halfHeight * 2,
+  };
+}
+
+function bentTailGhostSide(
+  tag: KoiTag,
+  image: ImageInfo,
+  rotation = frameCorrectionRotation(tag, image),
+): "left" | "right" | undefined {
+  const layoutBody = layoutBodyLine(tag, image);
+  const excludedTail = tag.bodyLine.slice(layoutBody.length);
+  const ghostFin = mirroredOneSidedFinPoints(tag, image);
+  if (!excludedTail.length || ghostFin.length < 2) return undefined;
+
+  const center = correctionCenter(tag, image);
+  const rotate = (points: Point[]) => points.map((point) => rotateImagePoint(point, center, rotation, image));
+  const layoutPoints = rotate(layoutBody);
+  const tailPoints = rotate(excludedTail);
+  const ghostPoints = rotate(ghostFin);
+  const layoutLeft = Math.min(...layoutPoints.map((point) => point.x));
+  const layoutRight = Math.max(...layoutPoints.map((point) => point.x));
+  const layoutCenter = (layoutLeft + layoutRight) / 2;
+  const ghostCenter = (
+    Math.min(...ghostPoints.map((point) => point.x)) +
+    Math.max(...ghostPoints.map((point) => point.x))
+  ) / 2;
+  const side = ghostCenter < layoutCenter ? "left" : "right";
+  const tolerance = Math.max(2 / image.width, 0.002);
+
+  if (side === "left") {
+    return Math.min(...tailPoints.map((point) => point.x)) < layoutLeft - tolerance
+      ? "left"
+      : undefined;
+  }
+  return Math.max(...tailPoints.map((point) => point.x)) > layoutRight + tolerance
+    ? "right"
+    : undefined;
+}
+
+function ghostSideVisibilityBox(layoutBox: Box, visibilityBox: Box): Box {
+  const verticallyCentered = centeredVisibilityBox(layoutBox, visibilityBox);
+  const layoutRight = layoutBox.x + layoutBox.width;
+  const visibilityRight = visibilityBox.x + visibilityBox.width;
+  const left = Math.min(layoutBox.x, visibilityBox.x);
+  const right = Math.max(layoutRight, visibilityRight);
+  return {
+    x: left,
+    y: verticallyCentered.y,
+    width: right - left,
+    height: verticallyCentered.height,
+  };
+}
+
 function displayCrop(tag: KoiTag, image: ImageInfo, correctedBox: Box, settings: CropSettings) {
   const lengthPx = bodyLengthPx(tag, image);
-  const padded = expandFreeBoxByPixels(correctedBox, image, lengthPx * settings.marginXByLength, lengthPx * settings.marginYByLength);
-  return ensureMinBoxSizePixels(padded, image, lengthPx * 0.28, lengthPx * 0.65);
+  const layoutBox = tag.polygonBoxEdited
+    ? correctedBox
+    : layoutCorrectedBox(tag, image, frameCorrectionRotation(tag, image));
+  const padded = expandFreeBoxByPixels(layoutBox, image, lengthPx * settings.marginXByLength, lengthPx * settings.marginYByLength);
+  const framedBody = ensureMinBoxSizePixels(padded, image, lengthPx * 0.28, lengthPx * 0.65);
+  const tailGhostSide = tag.polygonBoxEdited
+    ? undefined
+    : bentTailGhostSide(tag, image, frameCorrectionRotation(tag, image));
+  const horizontalMargin = lengthPx * settings.marginXByLength / image.width;
+  const tailVisibilityWithMargin = tailGhostSide === "left"
+    ? {
+        ...correctedBox,
+        x: correctedBox.x - horizontalMargin,
+        width: correctedBox.width + horizontalMargin,
+      }
+    : tailGhostSide === "right"
+      ? { ...correctedBox, width: correctedBox.width + horizontalMargin }
+      : correctedBox;
+  return tailGhostSide
+    ? ghostSideVisibilityBox(framedBody, tailVisibilityWithMargin)
+    : centeredVisibilityBox(framedBody, correctedBox);
 }
 
 function orientedCorrectedBoxPoints(tag: KoiTag, image: ImageInfo) {
   const rotation = frameCorrectionRotation(tag, image);
-  const center = correctionCenter(tag);
+  const center = correctionCenter(tag, image);
   return orderedBoxCorners(sourceCorrectedBox(tag, image, rotation)).map((point) => rotateImagePoint(point, center, -rotation, image));
 }
 
@@ -916,7 +1267,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     activeLineEndpointTarget.endpoint === "start"
       ? activeLineEndpointTarget
       : null;
-  const imageFrame = image ? containImageFrame(image, stageSize, embedMode ? 0.04 : 0) : null;
+  const imageFrame = image ? containImageFrame(image, stageSize) : null;
 
   useEffect(() => {
     viewRef.current = view;
@@ -990,19 +1341,31 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
 
     function updateStageSize() {
       const rect = stage.getBoundingClientRect();
-      setStageSize({ x: 0, y: 0, width: rect.width, height: rect.height });
+      const width = rect.width || stage.clientWidth || window.visualViewport?.width || window.innerWidth;
+      const height = rect.height || stage.clientHeight || window.visualViewport?.height || window.innerHeight;
+      setStageSize({ x: 0, y: 0, width, height });
     }
 
     updateStageSize();
+    const firstFrame = window.requestAnimationFrame(updateStageSize);
+    let settledFrame = 0;
+    const secondFrame = window.requestAnimationFrame(() => {
+      settledFrame = window.requestAnimationFrame(updateStageSize);
+    });
     const observer = new ResizeObserver(updateStageSize);
     observer.observe(stage);
     window.addEventListener("resize", updateStageSize);
     window.addEventListener("orientationchange", updateStageSize);
+    window.visualViewport?.addEventListener("resize", updateStageSize);
 
     return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+      if (settledFrame) window.cancelAnimationFrame(settledFrame);
       observer.disconnect();
       window.removeEventListener("resize", updateStageSize);
       window.removeEventListener("orientationchange", updateStageSize);
+      window.visualViewport?.removeEventListener("resize", updateStageSize);
     };
   }, [image]);
 
@@ -1267,7 +1630,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     const context = canvas.getContext("2d");
     if (!context) return;
 
-    const center = correctionCenter(tag);
+    const center = correctionCenter(tag, image!);
     const centerX = center.x * image!.width;
     const centerY = center.y * image!.height;
     const cropX = crop.x * image!.width;
@@ -1358,7 +1721,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       cropBox: geometry.correctedBox,
       cropInference: deriveCropInference(tag, image),
       rotationDeg: geometry.rotation,
-      rotationPivot: correctionCenter(tag),
+      rotationPivot: correctionCenter(tag, image),
       correctedPolygon: orientedCorrectedBoxPoints(tag, image),
       imageWidth: image.width,
       imageHeight: image.height,
@@ -1716,7 +2079,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
         const targetKey: "bbox" | "polygonBox" = tag.id === editingTagId && image ? "polygonBox" : "bbox";
         const correctedEditPatch = targetKey === "polygonBox" ? { polygonBoxEdited: true } : {};
         const normalizeTargetBox = targetKey === "polygonBox" ? normalizeFreeBox : normalizeBox;
-        const dragPoint = targetKey === "polygonBox" && image ? rotateImagePoint(point, correctionCenter(tag), frameCorrectionRotation(tag, image), image) : point;
+        const dragPoint = targetKey === "polygonBox" && image ? rotateImagePoint(point, correctionCenter(tag, image), frameCorrectionRotation(tag, image), image) : point;
 
         if (activeDrag.handle === "move") {
           return {
@@ -1915,7 +2278,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
     if (!point || !tag) return;
     const isPolygonEdit = tag.id === editingTagId && image;
     const startBox = isPolygonEdit ? correctedGeometry(tag, image).correctedBox : tag.bbox;
-    const startPoint = isPolygonEdit ? rotateImagePoint(point, correctionCenter(tag), frameCorrectionRotation(tag, image), image) : point;
+    const startPoint = isPolygonEdit ? rotateImagePoint(point, correctionCenter(tag, image), frameCorrectionRotation(tag, image), image) : point;
     setActiveTagId(tagId);
     setEditingTagId(tagId);
     setLineEditingTagId(null);
@@ -2738,7 +3101,7 @@ function RotatedCropCanvas({
     if (!context) return;
 
     function draw(photo: HTMLImageElement) {
-      const center = correctionCenter(tag);
+      const center = correctionCenter(tag, image);
       const centerX = center.x * image.width;
       const centerY = center.y * image.height;
       const cropX = crop.x * image.width;

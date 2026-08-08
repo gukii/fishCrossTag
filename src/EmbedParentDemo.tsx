@@ -101,7 +101,7 @@ export default function EmbedParentDemo() {
   }
 
   return (
-    <main className="parent-demo-shell embed-parent-shell">
+    <main className={started ? "parent-demo-shell embed-parent-shell embed-parent-active" : "parent-demo-shell embed-parent-shell"}>
       <section className="parent-demo-panel">
         <div>
           <h1>Embedded editor demo</h1>

@@ -1417,6 +1417,21 @@ h2 {
   .parent-demo-empty {
     height: 72dvh;
   }
+
+  .embed-parent-shell.embed-parent-active {
+    display: block;
+    min-height: 100dvh;
+  }
+
+  .embed-parent-shell.embed-parent-active .parent-demo-panel {
+    display: none;
+  }
+
+  .embed-parent-shell.embed-parent-active .parent-demo-frame-wrap,
+  .embed-parent-shell.embed-parent-active .parent-demo-frame {
+    width: 100vw;
+    height: 100dvh;
+  }
 }
 
 .dashboard-shell {
