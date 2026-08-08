@@ -317,6 +317,78 @@ function pathLengthPx(points: Point[], image: ImageInfo) {
   }, 0);
 }
 
+function layoutBodyLine(tag: KoiTag, image: ImageInfo): Point[] {
+  if (tag.bodyLine.length < 4) return tag.bodyLine;
+
+  const cumulative = [0];
+  for (let index = 1; index < tag.bodyLine.length; index += 1) {
+    const previous = tag.bodyLine[index - 1];
+    const point = tag.bodyLine[index];
+    cumulative.push(
+      cumulative[index - 1] + Math.hypot(
+        (point.x - previous.x) * image.width,
+        (point.y - previous.y) * image.height,
+      ),
+    );
+  }
+  const totalLength = cumulative[cumulative.length - 1] ?? 0;
+  if (totalLength < 40) return tag.bodyLine;
+
+  const pointAtDistance = (distance: number) => {
+    const index = cumulative.findIndex((value) => value >= distance);
+    if (index <= 0) return tag.bodyLine[0];
+    if (index < 0) return tag.bodyLine[tag.bodyLine.length - 1];
+    const start = tag.bodyLine[index - 1];
+    const end = tag.bodyLine[index];
+    const segmentStart = cumulative[index - 1];
+    const segmentLength = cumulative[index] - segmentStart;
+    const amount = segmentLength > 0 ? (distance - segmentStart) / segmentLength : 0;
+    return {
+      x: start.x + (end.x - start.x) * amount,
+      y: start.y + (end.y - start.y) * amount,
+    };
+  };
+  const axisStart = pointAtDistance(totalLength * 0.08);
+  const axisEnd = pointAtDistance(totalLength * 0.58);
+  const axis = {
+    x: (axisEnd.x - axisStart.x) * image.width,
+    y: (axisEnd.y - axisStart.y) * image.height,
+  };
+  const axisLength = Math.hypot(axis.x, axis.y);
+  if (axisLength < 1) return tag.bodyLine;
+
+  for (let fraction = 0.62; fraction <= 0.88; fraction += 0.02) {
+    const startDistance = totalLength * fraction;
+    const start = pointAtDistance(startDistance);
+    const end = pointAtDistance(Math.min(totalLength, startDistance + totalLength * 0.1));
+    const tailVector = {
+      x: (end.x - start.x) * image.width,
+      y: (end.y - start.y) * image.height,
+    };
+    const tailLength = Math.hypot(tailVector.x, tailVector.y);
+    if (tailLength < 1) continue;
+
+    const dot = clamp(
+      (axis.x * tailVector.x + axis.y * tailVector.y) / (axisLength * tailLength),
+      -1,
+      1,
+    );
+    const angle = (Math.acos(dot) * 180) / Math.PI;
+    const tailEnd = tag.bodyLine[tag.bodyLine.length - 1];
+    const tailOffset = {
+      x: (tailEnd.x - start.x) * image.width,
+      y: (tailEnd.y - start.y) * image.height,
+    };
+    const lateralReach = Math.abs(axis.x * tailOffset.y - axis.y * tailOffset.x) / axisLength;
+    if (angle >= 38 && lateralReach >= Math.max(20, totalLength * 0.07)) {
+      const cutIndex = cumulative.findIndex((distance) => distance >= startDistance);
+      return tag.bodyLine.slice(0, Math.max(2, cutIndex + 1));
+    }
+  }
+
+  return tag.bodyLine;
+}
+
 function nearestMainLineInfo(point: Point, bodyLine: Point[], image: ImageInfo) {
   let best:
     | {
@@ -521,8 +593,16 @@ function inferredAnnotationPoints(tag: KoiTag, image: ImageInfo): Point[] {
   ];
 }
 
+function layoutAnnotationPoints(tag: KoiTag, image: ImageInfo): Point[] {
+  return [
+    ...layoutBodyLine(tag, image),
+    ...(tag.finLine ?? []),
+    ...mirroredOneSidedFinPoints(tag, image),
+  ];
+}
+
 function correctionCenter(tag: KoiTag, image: ImageInfo): Point {
-  return boxCenter(boxFromPoints(inferredAnnotationPoints(tag, image), 0));
+  return boxCenter(boxFromPoints(layoutAnnotationPoints(tag, image), 0));
 }
 
 function boxFromPointsWithMargin(points: Point[], marginX: number, marginY: number): Box {
@@ -734,7 +814,7 @@ function polygonPoints(points: Point[]) {
 }
 
 function baseCorrectionRotation(tag: KoiTag, image: ImageInfo) {
-  return headWeightedLineRotation(tag.bodyLine, image);
+  return headWeightedLineRotation(layoutBodyLine(tag, image), image);
 }
 
 function manualRotationDelta(tag: KoiTag) {
@@ -750,8 +830,9 @@ function cropCorrectionRotation(tag: KoiTag, image: ImageInfo) {
 }
 
 function bodyLengthPx(tag: KoiTag, image: ImageInfo) {
-  const head = tag.bodyLine[0];
-  const tail = tag.bodyLine[tag.bodyLine.length - 1];
+  const bodyLine = layoutBodyLine(tag, image);
+  const head = bodyLine[0];
+  const tail = bodyLine[bodyLine.length - 1];
   return Math.max(40, Math.hypot((head.x - tail.x) * image.width, (head.y - tail.y) * image.height));
 }
 
@@ -770,10 +851,48 @@ function sourceCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = frameCorre
   return boxFromPointsWithMargin(rotatedPoints, strokeSafeMarginPx / image.width, strokeSafeMarginPx / image.height);
 }
 
+function layoutCorrectedBox(tag: KoiTag, image: ImageInfo, rotation = frameCorrectionRotation(tag, image)) {
+  const center = correctionCenter(tag, image);
+  const rotatedPoints = layoutAnnotationPoints(tag, image)
+    .map((point) => rotateImagePoint(point, center, rotation, image));
+  const fallbackMarginPx = tag.finLine ? 1 : bodyLengthPx(tag, image) * 0.04;
+  const strokeSafeMarginPx = Math.max(fallbackMarginPx, CORRECTED_BOX_STROKE_MARGIN_PX);
+  return boxFromPointsWithMargin(
+    rotatedPoints,
+    strokeSafeMarginPx / image.width,
+    strokeSafeMarginPx / image.height,
+  );
+}
+
+function centeredVisibilityBox(layoutBox: Box, visibilityBox: Box): Box {
+  const centerX = layoutBox.x + layoutBox.width / 2;
+  const centerY = layoutBox.y + layoutBox.height / 2;
+  const halfWidth = Math.max(
+    layoutBox.width / 2,
+    centerX - visibilityBox.x,
+    visibilityBox.x + visibilityBox.width - centerX,
+  );
+  const halfHeight = Math.max(
+    layoutBox.height / 2,
+    centerY - visibilityBox.y,
+    visibilityBox.y + visibilityBox.height - centerY,
+  );
+  return {
+    x: centerX - halfWidth,
+    y: centerY - halfHeight,
+    width: halfWidth * 2,
+    height: halfHeight * 2,
+  };
+}
+
 function displayCrop(tag: KoiTag, image: ImageInfo, correctedBox: Box, settings: CropSettings) {
   const lengthPx = bodyLengthPx(tag, image);
-  const padded = expandFreeBoxByPixels(correctedBox, image, lengthPx * settings.marginXByLength, lengthPx * settings.marginYByLength);
-  return ensureMinBoxSizePixels(padded, image, lengthPx * 0.28, lengthPx * 0.65);
+  const layoutBox = tag.polygonBoxEdited
+    ? correctedBox
+    : layoutCorrectedBox(tag, image, frameCorrectionRotation(tag, image));
+  const padded = expandFreeBoxByPixels(layoutBox, image, lengthPx * settings.marginXByLength, lengthPx * settings.marginYByLength);
+  const framedBody = ensureMinBoxSizePixels(padded, image, lengthPx * 0.28, lengthPx * 0.65);
+  return centeredVisibilityBox(framedBody, correctedBox);
 }
 
 function orientedCorrectedBoxPoints(tag: KoiTag, image: ImageInfo) {
