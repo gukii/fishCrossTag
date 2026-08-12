@@ -463,13 +463,16 @@ function deriveFinMetrics(tag: KoiTag, image: ImageInfo): FinMetrics | undefined
   const hasLeft = sideValues.some((value) => value > 0.000001);
   const hasRight = sideValues.some((value) => value < -0.000001);
   const minDistancePx = Math.min(...pointInfos.map((item) => item.info.distancePx));
+  const reachesBodyWhenExtended = !crossesMainLine && mentallyExtendedFinReachesBody(tag.bodyLine, finLine, image);
   const relationToBody = crossesMainLine
     ? "crosses-main-line"
     : minDistancePx <= Math.max(16, bodyLengthPx(tag, image) * 0.045)
       ? "one-sided-attached"
       : minDistancePx <= Math.max(42, bodyLengthPx(tag, image) * 0.12)
         ? "near-body-detached"
-        : "unclear";
+        : reachesBodyWhenExtended
+          ? "near-body-detached"
+          : "unclear";
 
   const buildSide = (sideValue: 1 | -1) => {
     const sidePoints = pointInfos.filter((item) => (sideValue > 0 ? item.info.sideValue >= -0.000001 : item.info.sideValue <= 0.000001));
@@ -501,7 +504,57 @@ function isFinStrokeForTag(tag: KoiTag, stroke: Point[], image: ImageInfo | null
   if (strokesIntersect(tag.bodyLine, stroke)) return true;
   if (!image) return false;
   const metrics = deriveFinMetrics({ ...tag, finLine: stroke }, image);
-  return metrics?.relationToBody === "one-sided-attached" || metrics?.relationToBody === "near-body-detached";
+  return metrics?.relationToBody === "one-sided-attached"
+    || metrics?.relationToBody === "near-body-detached"
+    || mentallyExtendedFinReachesBody(tag.bodyLine, stroke, image);
+}
+
+function mentallyExtendedFinReachesBody(bodyLine: Point[], finLine: Point[], image: ImageInfo) {
+  if (bodyLine.length < 2 || finLine.length < 2) return false;
+
+  const bodyPixels = bodyLine.map((point) => ({ x: point.x * image.width, y: point.y * image.height }));
+  const finPixels = finLine.map((point) => ({ x: point.x * image.width, y: point.y * image.height }));
+  const endpointIndexes = [0, finPixels.length - 1] as const;
+  const endpointProjections = endpointIndexes.map((index) => nearestPolylineProjection(finPixels[index], bodyPixels));
+  if (endpointProjections.some((projection) => !projection)) return false;
+
+  const rootEndpoint = endpointProjections[0]!.distanceSquared <= endpointProjections[1]!.distanceSquared ? 0 : 1;
+  const rootIndex = endpointIndexes[rootEndpoint];
+  const root = finPixels[rootIndex];
+  const rootDistance = Math.sqrt(endpointProjections[rootEndpoint]!.distanceSquared);
+  const pointDistances = finPixels.map((point) => nearestPolylineProjection(point, bodyPixels));
+  if (pointDistances.some((projection) => !projection)) return false;
+  const outerDistance = Math.sqrt(Math.max(...pointDistances.map((projection) => projection!.distanceSquared)));
+
+  // The outer fin point is whichever point is furthest from the main line. This
+  // makes recognition independent of the direction in which the line was drawn.
+  if (outerDistance < rootDistance + 4) return false;
+
+  const orderedFin = rootIndex === 0 ? finPixels : [...finPixels].reverse();
+  const cumulative = cumulativePointDistances(orderedFin);
+  const finLength = cumulative[cumulative.length - 1] ?? 0;
+  if (finLength < 4) return false;
+  const directionSample = pointAtPolylineDistance(orderedFin, cumulative, Math.min(finLength, Math.max(12, finLength * 0.35)));
+  const inwardDirection = { x: root.x - directionSample.x, y: root.y - directionSample.y };
+  const inwardLength = Math.hypot(inwardDirection.x, inwardDirection.y);
+  if (inwardLength < 1) return false;
+
+  for (let index = 1; index < bodyPixels.length; index += 1) {
+    const candidate = infiniteLineSegmentIntersection(root, inwardDirection, bodyPixels[index - 1], bodyPixels[index]);
+    if (!candidate || candidate.lineT < -0.000001) continue;
+
+    const bodyDirection = {
+      x: bodyPixels[index].x - bodyPixels[index - 1].x,
+      y: bodyPixels[index].y - bodyPixels[index - 1].y,
+    };
+    const bodyLength = Math.hypot(bodyDirection.x, bodyDirection.y);
+    if (bodyLength < 1) continue;
+    const alignment = Math.abs((inwardDirection.x * bodyDirection.x + inwardDirection.y * bodyDirection.y) / (inwardLength * bodyLength));
+    const angleDeg = (Math.acos(clamp(alignment, -1, 1)) * 180) / Math.PI;
+    if (angleDeg >= 25) return true;
+  }
+
+  return false;
 }
 
 function deriveCropInference(tag: KoiTag, image: ImageInfo): CropInference {
@@ -590,20 +643,13 @@ function localBodyMirrorAxis(bodyLine: Point[], finLine: Point[]) {
   const nearest = finLine.map((point) => nearestPolylineProjection(point, bodyLine));
   if (nearest.some((value) => !value)) return undefined;
   const resolved = nearest as Array<NonNullable<(typeof nearest)[number]>>;
-  const rootIndex = resolved.reduce(
-    (best, value, index) => value.distanceSquared < resolved[best].distanceSquared ? index : best,
-    0,
-  );
+  // A one-sided fin attaches at one endpoint. Using only the endpoints keeps a
+  // bent body from selecting an unrelated middle/outer fin point as the root.
+  const rootIndex = resolved[0].distanceSquared <= resolved[resolved.length - 1].distanceSquared
+    ? 0
+    : finLine.length - 1;
   const root = finLine[rootIndex];
-  const neighborIndexes = [rootIndex - 1, rootIndex + 1].filter((index) => index >= 0 && index < finLine.length);
-  const neighborIndex = neighborIndexes.reduce<number | undefined>((best, index) => {
-    if (best === undefined) return index;
-    return resolved[index].distanceSquared > resolved[best].distanceSquared ? index : best;
-  }, undefined);
-  const neighbor = neighborIndex === undefined ? undefined : finLine[neighborIndex];
-  const finDirection = neighbor
-    ? { x: neighbor.x - root.x, y: neighbor.y - root.y }
-    : { x: finLine.at(-1)!.x - finLine[0].x, y: finLine.at(-1)!.y - finLine[0].y };
+  const finDirection = finApproachDirection(finLine, rootIndex);
   if (Math.hypot(finDirection.x, finDirection.y) < 0.001) return undefined;
 
   let intersection: {
@@ -636,6 +682,20 @@ function localBodyMirrorAxis(bodyLine: Point[], finLine: Point[]) {
   const direction = { x: axisEnd.x - axisStart.x, y: axisEnd.y - axisStart.y };
 
   return Math.hypot(direction.x, direction.y) >= 0.001 ? { direction, origin } : undefined;
+}
+
+function finApproachDirection(finLine: Point[], rootIndex: number) {
+  const outwardPath = rootIndex === 0 ? finLine : [...finLine].reverse();
+  const cumulative = cumulativePointDistances(outwardPath);
+  const totalLength = cumulative[cumulative.length - 1] ?? 0;
+  if (totalLength < 0.001) return { x: 0, y: 0 };
+
+  // Ignore a tiny, jittery final input segment and sample the fin's local
+  // approach over a physical distance. This also works in either draw order.
+  const sampleDistance = clamp(totalLength * 0.18, Math.min(8, totalLength), 40);
+  const sample = pointAtPolylineDistance(outwardPath, cumulative, sampleDistance);
+  const root = outwardPath[0];
+  return { x: sample.x - root.x, y: sample.y - root.y };
 }
 
 function nearestPolylineProjection(point: Point, line: Point[]) {
@@ -681,6 +741,7 @@ function infiniteLineSegmentIntersection(
   return {
     point: { x: lineOrigin.x + lineDirection.x * lineT, y: lineOrigin.y + lineDirection.y * lineT },
     segmentT: clamp(segmentT, 0, 1),
+    lineT,
   };
 }
 
@@ -2773,26 +2834,28 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                   {mode === "move" ? <ZoomIn size={19} /> : <Signature size={19} />}
                 </Button>
 
-                <Button
-                  className="floating-mode-button paint-tool-button"
-                  size="icon"
-                  variant={paintMode === "crosshair" ? "default" : "secondary"}
-                  onClick={() => {
-                    setPaintMode((current) => {
-                      const next = current === "crosshair" ? "direct" : "crosshair";
-                      if (next === "crosshair" && cropSettings.showCrosshairIntro) {
-                        setShowCrosshairIntro(true);
-                      }
-                      return next;
-                    });
-                    setAimPoint(null);
-                    setDrag(null);
-                    aimPointerId.current = null;
-                  }}
-                  aria-label={paintMode === "crosshair" ? "Use direct finger painting" : "Use crosshair painting"}
-                >
-                  {paintMode === "crosshair" ? <Crosshair size={18} /> : <Fingerprint size={18} />}
-                </Button>
+                {!embedMode && (
+                  <Button
+                    className="floating-mode-button paint-tool-button"
+                    size="icon"
+                    variant={paintMode === "crosshair" ? "default" : "secondary"}
+                    onClick={() => {
+                      setPaintMode((current) => {
+                        const next = current === "crosshair" ? "direct" : "crosshair";
+                        if (next === "crosshair" && cropSettings.showCrosshairIntro) {
+                          setShowCrosshairIntro(true);
+                        }
+                        return next;
+                      });
+                      setAimPoint(null);
+                      setDrag(null);
+                      aimPointerId.current = null;
+                    }}
+                    aria-label={paintMode === "crosshair" ? "Use direct finger painting" : "Use crosshair painting"}
+                  >
+                    {paintMode === "crosshair" ? <Crosshair size={18} /> : <Fingerprint size={18} />}
+                  </Button>
+                )}
 
                 <Button
                   className="floating-mode-button"
