@@ -2834,26 +2834,28 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
                   {mode === "move" ? <ZoomIn size={19} /> : <Signature size={19} />}
                 </Button>
 
-                <Button
-                  className="floating-mode-button paint-tool-button"
-                  size="icon"
-                  variant={paintMode === "crosshair" ? "default" : "secondary"}
-                  onClick={() => {
-                    setPaintMode((current) => {
-                      const next = current === "crosshair" ? "direct" : "crosshair";
-                      if (next === "crosshair" && cropSettings.showCrosshairIntro) {
-                        setShowCrosshairIntro(true);
-                      }
-                      return next;
-                    });
-                    setAimPoint(null);
-                    setDrag(null);
-                    aimPointerId.current = null;
-                  }}
-                  aria-label={paintMode === "crosshair" ? "Use direct finger painting" : "Use crosshair painting"}
-                >
-                  {paintMode === "crosshair" ? <Crosshair size={18} /> : <Fingerprint size={18} />}
-                </Button>
+                {!embedMode && (
+                  <Button
+                    className="floating-mode-button paint-tool-button"
+                    size="icon"
+                    variant={paintMode === "crosshair" ? "default" : "secondary"}
+                    onClick={() => {
+                      setPaintMode((current) => {
+                        const next = current === "crosshair" ? "direct" : "crosshair";
+                        if (next === "crosshair" && cropSettings.showCrosshairIntro) {
+                          setShowCrosshairIntro(true);
+                        }
+                        return next;
+                      });
+                      setAimPoint(null);
+                      setDrag(null);
+                      aimPointerId.current = null;
+                    }}
+                    aria-label={paintMode === "crosshair" ? "Use direct finger painting" : "Use crosshair painting"}
+                  >
+                    {paintMode === "crosshair" ? <Crosshair size={18} /> : <Fingerprint size={18} />}
+                  </Button>
+                )}
 
                 <Button
                   className="floating-mode-button"
