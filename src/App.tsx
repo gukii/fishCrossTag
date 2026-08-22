@@ -1780,6 +1780,7 @@ export default function App({ initialImage, sessionId, sessionMode = false, meta
       finMetrics: deriveFinMetrics(tag, image),
       correctedBox: geometry.correctedBox,
       cropBox: geometry.correctedBox,
+      cropBoxEdited: Boolean(tag.polygonBoxEdited),
       cropInference: deriveCropInference(tag, image),
       rotationDeg: geometry.rotation,
       rotationPivot: correctionCenter(tag, image),

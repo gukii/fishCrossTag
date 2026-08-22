@@ -55,6 +55,7 @@ export type FishAnnotationPayload = {
   correctedPolygon?: WorkflowPoint[];
   correctedBox?: WorkflowBox;
   cropBox?: WorkflowBox;
+  cropBoxEdited?: boolean;
   cropInference?: CropInference;
   rotationDeg?: number;
   rotationPivot?: WorkflowPoint;
@@ -100,6 +101,7 @@ export type FishCrossLineTagResultV1 = {
   rotationDeg: number;
   rotationPivot: WorkflowPoint;
   cropBox: WorkflowBox;
+  cropBoxEdited?: boolean;
 };
 
 export type FishCrossLineResultV1 = {

@@ -76,6 +76,7 @@ function resultFromPayload(payload: TaggerCompletePayload, image: EmbedImage): F
         rotationDeg: annotation.rotationDeg ?? 0,
         rotationPivot: annotation.rotationPivot!,
         cropBox: annotation.cropBox!,
+        cropBoxEdited: annotation.cropBoxEdited,
       })),
   };
 }
