@@ -9,6 +9,7 @@ export const EMBED_ERROR_MESSAGE = "fishcrossline:embed:error";
 export type FishCrossLineEmbedInitMessage = {
   type: typeof EMBED_INIT_MESSAGE;
   nonce: string;
+  grant: string;
   image: {
     bytes: ArrayBuffer;
     mimeType: string;
@@ -46,4 +47,3 @@ export type FishCrossLineEmbedOutgoingMessage =
   | FishCrossLineEmbedCompleteMessage
   | FishCrossLineEmbedCancelMessage
   | FishCrossLineEmbedErrorMessage;
-

@@ -38,6 +38,10 @@ function isAllowedOrigin(origin: string, expectedOrigin: string) {
 
 function probeEmbedImage(message: FishCrossLineEmbedIncomingMessage) {
   return new Promise<EmbedImage>((resolve, reject) => {
+    if (message.image.bytes.byteLength > 25 * 1024 * 1024) {
+      reject(new Error("Embed image is too large"));
+      return;
+    }
     const blob = new Blob([message.image.bytes], { type: message.image.mimeType });
     if (!blob.type.startsWith("image/")) {
       reject(new Error("Embed image must be an image file"));
@@ -123,6 +127,16 @@ export default function EmbedTagger() {
       }
 
       try {
+        if (typeof data.grant !== "string" || data.grant.length > 4_000) {
+          throw new Error("Embed authorization is missing");
+        }
+        const authorization = await fetch("/api/embed/authorize", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ grant: data.grant, nonce, parentOrigin: event.origin }),
+          credentials: "same-origin",
+        });
+        if (!authorization.ok) throw new Error("KoiTag authorization expired or was already used");
         sourceWindow.current = event.source;
         sourceOrigin.current = event.origin;
         if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);

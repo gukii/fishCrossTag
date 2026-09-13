@@ -150,35 +150,22 @@ The current webhook delivery is intentionally simple: one POST attempt when the 
 
 ## Security Status
 
-The current Railway proof does not use a secret.
-
-Current behavior:
-
-- `POST /api/sessions` is open.
-- Webhook delivery is not signed.
-- Image URLs are trusted as provided by the caller.
-- `parentOrigin` is passed in the tagger URL and used for browser `postMessage`.
-- Sessions are stored in memory and disappear on restart/sleep.
-
-This is acceptable for trusted testing, but not production.
-
-Production controls to add:
-
-- Require an API key when creating sessions:
+KoiTag's lightweight `/embed` integration requires a two-minute, one-time HMAC grant. Configure the same independent value of at least 32 characters in KoiTag and this service:
 
 ```txt
-Authorization: Bearer <FISHCROSS_API_KEY>
+FISH_CROSS_LINE_EMBED_SECRET=<embed-secret>
 ```
 
-- Sign webhook payloads with HMAC:
+The grant is bound to the exact KoiTag origin and browser nonce, then consumed once in SQLite before the iframe accepts image bytes. KoiTag does not send its fish identifier or original filename. During rotation, this service can temporarily verify `FISH_CROSS_LINE_EMBED_SECRET_PREVIOUS`; KoiTag signs with the current secret.
+
+All other `/api/*` routes except `/api/health` require a separate production administrator bearer secret. `/api/embed/authorize` remains public because the signed one-time grant is its credential.
 
 ```txt
-X-FishCross-Signature: sha256=...
+FISH_CROSS_LINE_ADMIN_SECRET=<admin-api-secret>
+Authorization: Bearer <admin-api-secret>
 ```
 
-- Use short-lived signed launch URLs if the parent opens a one-step `/tag?imageUrl=...` URL.
-- Persist sessions and webhook delivery records.
-- Validate allowed caller origins instead of accepting arbitrary `parentOrigin` values.
+Local development remains open when the administrator secret is absent. Production fails closed. The standalone session flow still accepts caller-provided image and webhook URLs once authenticated; outbound allowlists and signed webhook delivery remain future hardening before exposing that flow to untrusted callers.
 
 To test webhook delivery without a parent backend:
 
@@ -279,11 +266,10 @@ The parent replies with image bytes:
 type FishCrossLineEmbedInitMessage = {
   type: "fishcrossline:embed:init";
   nonce: string;
+  grant: string;
   image: {
     bytes: ArrayBuffer;
     mimeType: string;
-    name?: string;
-    id?: string;
   };
 };
 ```

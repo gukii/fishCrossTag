@@ -1,6 +1,17 @@
 pragma journal_mode = wal;
 pragma foreign_keys = on;
 
+create table if not exists embed_grant_exchanges (
+  grant_id text primary key,
+  user_id text not null,
+  parent_origin text not null,
+  exchanged_at text not null,
+  expires_at integer not null
+);
+
+create index if not exists embed_grant_exchanges_expiry_idx
+  on embed_grant_exchanges(expires_at);
+
 create table if not exists image_batches (
   id text primary key,
   name text not null,

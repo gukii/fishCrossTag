@@ -12,6 +12,7 @@
     "dev": "vite",
     "dev:api": "bun server/api.ts",
     "build": "vite build",
+    "test:security": "bun test server/embedAuth.test.ts",
     "preview": "vite preview --host 0.0.0.0",
     "start": "bun server/api.ts",
     "start:web": "vite preview --host 0.0.0.0 --port ${PORT:-4173}",

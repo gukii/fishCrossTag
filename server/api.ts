@@ -1,6 +1,8 @@
 import { jsonResponse, nowIso, optionsResponse } from "./http";
 import { createSession, getSession, saveSessionDraft, completeSession, saveSessionWebhookStatus } from "./sessionStore";
 import { dashboardSeed, deriveAnnotationBuckets, FishAnnotationPayload, TaggerCompletePayload, TaggerSession } from "../src/workflow";
+import { consumeEmbedGrant } from "./embedAuth";
+import { apiRequestIsAuthorized } from "./apiAuth";
 
 type RouteHandler = (request: Request, params: Record<string, string>) => Response | Promise<Response>;
 
@@ -87,6 +89,54 @@ async function deliverCompletionWebhook(session: TaggerSession) {
 }
 
 route("GET", "/api/health", () => jsonResponse({ ok: true, at: nowIso() }));
+
+route("POST", "/api/embed/authorize", async (request) => {
+  const parsed = await readBoundedJson(request, 8_192);
+  if ("response" in parsed) return parsed.response;
+  const body = parsed.value as { grant?: unknown; nonce?: unknown; parentOrigin?: unknown };
+  if (typeof body.grant !== "string" || typeof body.nonce !== "string" || typeof body.parentOrigin !== "string") {
+    return jsonResponse({ error: "Invalid embed authorization" }, { status: 400 });
+  }
+  const grant = consumeEmbedGrant(body.grant, { nonce: body.nonce, parentOrigin: body.parentOrigin });
+  return grant
+    ? jsonResponse({ ok: true }, { headers: { "cache-control": "private, no-store" } })
+    : jsonResponse({ error: "Embed authorization denied" }, { status: 401, headers: { "cache-control": "private, no-store" } });
+});
+
+async function readBoundedJson(request: Request, maximumBytes: number): Promise<{ value: unknown } | { response: Response }> {
+  if (!request.headers.get("content-type")?.toLowerCase().includes("application/json")) {
+    return { response: jsonResponse({ error: "JSON request required" }, { status: 415 }) };
+  }
+  const declaredLength = Number(request.headers.get("content-length") ?? 0);
+  if (!Number.isFinite(declaredLength) || declaredLength < 0 || declaredLength > maximumBytes) {
+    return { response: jsonResponse({ error: "Request too large" }, { status: 413 }) };
+  }
+  const reader = request.body?.getReader();
+  if (!reader) return { response: jsonResponse({ error: "Request body required" }, { status: 400 }) };
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    length += value.byteLength;
+    if (length > maximumBytes) {
+      await reader.cancel();
+      return { response: jsonResponse({ error: "Request too large" }, { status: 413 }) };
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return { value: JSON.parse(new TextDecoder().decode(bytes)) };
+  } catch {
+    return { response: jsonResponse({ error: "Invalid JSON request" }, { status: 400 }) };
+  }
+}
 
 route("POST", "/api/sessions", async (request) => {
   const body = (await request.json()) as {
@@ -314,6 +364,12 @@ async function staticResponse(request: Request) {
 
 export async function fetch(request: Request) {
   if (request.method === "OPTIONS") return optionsResponse();
+  if (!apiRequestIsAuthorized(request)) {
+    return jsonResponse(
+      { error: "Authorization required" },
+      { status: 401, headers: { "cache-control": "private, no-store", "www-authenticate": "Bearer" } },
+    );
+  }
   const matched = matchRoute(request);
   if (!matched) return staticResponse(request);
 
